@@ -27,8 +27,32 @@ void Texture::setWidth(int width) { width_ = width; }
 
 Text::Text(const std::string& text, SDL_Color color, SDL_Renderer* renderer,
            TTF_Font* font)
-    : text_(text), color_(color) {
+    : color_(color) {
   setText(text, renderer, font);
+}
+
+Text::Text(Text&& other) noexcept
+    : text_(std::move(other.text_)),
+      height_(other.height_),
+      width_(other.width_),
+      origin_(other.origin_),
+      color_(other.color_) {
+  other.origin_ = nullptr;
+}
+
+Text& Text::operator=(Text&& other) noexcept {
+  if (this != &other) {
+    if (origin_) {
+      SDL_DestroyTexture(origin_);
+    }
+    text_ = std::move(other.text_);
+    height_ = other.height_;
+    width_ = other.width_;
+    origin_ = other.origin_;
+    color_ = other.color_;
+    other.origin_ = nullptr;
+  }
+  return *this;
 }
 
 Text::~Text() {

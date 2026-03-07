@@ -1,10 +1,70 @@
-.vscode
-dist
-snake
-*.zip
-storage.dat
-archive
-dungeon_rush
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
 *.o
+*.obj
+
+# Precompiled Headers
 *.gch
-build
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+dungeon_rush
+
+# CMake and Build directories
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+cpack_config.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CMakeLists.txt.user
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*~
+*.swp
+*.swo
+.DS_Store
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+archive/
+dist/
+
+# Project specifics
+storage.dat
+core
+snake

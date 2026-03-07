@@ -72,8 +72,8 @@ class Text {
        TTF_Font* font);
   Text(const Text&) = delete;
   Text& operator=(const Text&) = delete;
-  Text(Text&&) noexcept = default;
-  Text& operator=(Text&&) noexcept = default;
+  Text(Text&& other) noexcept;
+  Text& operator=(Text&& other) noexcept;
   ~Text();
 
   const std::string& value() const;
