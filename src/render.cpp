@@ -34,10 +34,7 @@ std::shared_ptr<Text> makeText(const std::string& text,
 }
 }  // namespace
 
-// Sprite
-extern std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM> spriteSnake;
-extern int spritesCount;
-extern int playersCount;
+// Sprite - using GameContext for access
 extern Effect effects[];
 extern SDL_Color BLACK;
 extern SDL_Color WHITE;
@@ -78,6 +75,7 @@ void initCountDownBar() {
 }
 void initInfo() {
   extern int stage;
+  GameContext& ctx = getGameContext();
   SDL_Renderer* sdlRenderer = renderer();
   if (!sdlRenderer) {
     return;
@@ -90,7 +88,8 @@ void initInfo() {
   } else {
     stageText = makeText(buf, sdlRenderer, ttfFont, WHITE);
   }
-  for (int i = 0; i < playersCount; i++) {
+  const int playerCount = ctx.entityManager.playerCount();
+  for (int i = 0; i < playerCount; i++) {
     if (!scoresText[i]) {
       scoresText[i] = makeText("placeholder", sdlRenderer, ttfFont, WHITE);
     }
@@ -404,8 +403,10 @@ void renderSnakeHp(const std::shared_ptr<Snake>& snake) {
   }
 }
 void renderHp() {
-  for (int i = 0; i < spritesCount; i++) {
-    renderSnakeHp(spriteSnake[i]);
+  GameContext& ctx = getGameContext();
+  const int count = ctx.entityManager.snakeCount();
+  for (int i = 0; i < count; i++) {
+    renderSnakeHp(ctx.entityManager.getSnake(i));
   }
 }
 void renderCenteredTextBackground(const Text* text, int x, int y, double scale) {
@@ -421,9 +422,11 @@ void renderCenteredTextBackground(const Text* text, int x, int y, double scale) 
   SDL_RenderFillRect(sdlRenderer, &dst);
 }
 void renderId() {
+  GameContext& ctx = getGameContext();
   const int powerful = getPowerfulPlayer();
-  for (int i = 0; i < playersCount; i++) {
-    const auto& snake = spriteSnake[i];
+  const int playerCount = ctx.entityManager.playerCount();
+  for (int i = 0; i < playerCount; i++) {
+    const auto& snake = ctx.entityManager.getSnake(i);
     if (!snake || snake->sprites().empty()) {
       continue;
     }
@@ -449,6 +452,7 @@ void renderCountDown() {
   }
 }
 void renderInfo() {
+  GameContext& ctx = getGameContext();
   SDL_Renderer* sdlRenderer = renderer();
   if (!sdlRenderer) {
     return;
@@ -460,9 +464,10 @@ void renderInfo() {
     renderText(stageText.get(), startX, startY, 1);
   }
   startY += lineGap;
-  for (int i = 0; i < playersCount; i++) {
+  const int playerCount = ctx.entityManager.playerCount();
+  for (int i = 0; i < playerCount; i++) {
     char buf[1 << 8];
-    const auto& snake = spriteSnake[i];
+    const auto& snake = ctx.entityManager.getSnake(i);
     if (!snake) {
       continue;
     }
@@ -475,11 +480,12 @@ void renderInfo() {
     }
     startY += lineGap;
   }
-  if (playersCount == 1) {
+  if (playerCount == 1) {
     extern int GAME_WIN_NUM;
     char buf[1 << 8];
-    const int remaining = spriteSnake[0]
-                              ? GAME_WIN_NUM - spriteSnake[0]->num()
+    const auto& snake0 = ctx.entityManager.getSnake(0);
+    const int remaining = snake0
+                              ? GAME_WIN_NUM - snake0->num()
                               : GAME_WIN_NUM;
     sprintf(buf, "Find %d more heros!", remaining > 0 ? remaining : 0);
     if (taskText) {

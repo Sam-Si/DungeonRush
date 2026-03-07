@@ -20,66 +20,76 @@ const PositionBufferSlot& PositionBuffer::at(int index) const {
 }
 
 Sprite::Sprite(const Sprite& model, int x, int y)
-    : x_(x),
-      y_(y),
-      hp_(model.hp_),
-      totalHp_(model.totalHp_),
-      weapon_(model.weapon_),
-      animation_(model.animation_ ? std::make_shared<Animation>(*model.animation_)
-                                  : nullptr),
-      face_(model.face_),
-      direction_(model.direction_),
-      lastAttack_(model.lastAttack_),
-      dropRate_(model.dropRate_) {
-  if (animation_) {
-    animation_->setPosition(x_, y_);
+    : transform_(x, y, model.transform_.direction()),
+      health_(model.health_),
+      render_(model.render_.animation()
+                  ? std::make_shared<Animation>(*model.render_.animation())
+                  : nullptr),
+      combat_(model.combat_),
+      positionBuffer_() {
+  if (render_.hasAnimation()) {
+    render_.updatePosition(x, y);
   }
 }
 
-int Sprite::x() const { return x_; }
-int Sprite::y() const { return y_; }
-int Sprite::hp() const { return hp_; }
-int Sprite::totalHp() const { return totalHp_; }
-Weapon* Sprite::weapon() const { return weapon_; }
-std::shared_ptr<Animation> Sprite::animation() const { return animation_; }
-Direction Sprite::face() const { return face_; }
-Direction Sprite::direction() const { return direction_; }
-int Sprite::lastAttack() const { return lastAttack_; }
-double Sprite::dropRate() const { return dropRate_; }
+// TransformComponent accessors
+int Sprite::x() const { return transform_.x(); }
+int Sprite::y() const { return transform_.y(); }
+Direction Sprite::face() const { return transform_.face(); }
+Direction Sprite::direction() const { return transform_.direction(); }
 
 void Sprite::setPosition(int x, int y) {
-  x_ = x;
-  y_ = y;
-  if (animation_) {
-    animation_->setPosition(x_, y_);
-  }
+  transform_.setPosition(x, y);
+  render_.updatePosition(x, y);
 }
 
-void Sprite::setHp(int hp) { hp_ = hp; }
-void Sprite::setTotalHp(int totalHp) { totalHp_ = totalHp; }
-void Sprite::setWeapon(Weapon* weapon) { weapon_ = weapon; }
+void Sprite::setFace(Direction face) { transform_.setFace(face); }
+void Sprite::setDirection(Direction direction) {
+  transform_.setDirection(direction);
+}
+
+// HealthComponent accessors
+int Sprite::hp() const { return health_.hp(); }
+int Sprite::totalHp() const { return health_.totalHp(); }
+void Sprite::setHp(int hp) { health_.setHp(hp); }
+void Sprite::setTotalHp(int totalHp) { health_.setTotalHp(totalHp); }
+
+// RenderComponent accessors
+std::shared_ptr<Animation> Sprite::animation() const {
+  return render_.animation();
+}
 void Sprite::setAnimation(const std::shared_ptr<Animation>& animation) {
-  animation_ = animation;
+  render_.setAnimation(animation);
 }
-void Sprite::setFace(Direction face) { face_ = face; }
-void Sprite::setDirection(Direction direction) { direction_ = direction; }
-void Sprite::setLastAttack(int lastAttack) { lastAttack_ = lastAttack; }
-void Sprite::setDropRate(double dropRate) { dropRate_ = dropRate; }
 
+// CombatComponent accessors
+Weapon* Sprite::weapon() const { return combat_.weapon(); }
+int Sprite::lastAttack() const { return combat_.lastAttack(); }
+double Sprite::dropRate() const { return combat_.dropRate(); }
+void Sprite::setWeapon(Weapon* weapon) { combat_.setWeapon(weapon); }
+void Sprite::setLastAttack(int lastAttack) { combat_.setLastAttack(lastAttack); }
+void Sprite::setDropRate(double dropRate) { combat_.setDropRate(dropRate); }
+
+// PositionBuffer
 PositionBuffer& Sprite::positionBuffer() { return positionBuffer_; }
 const PositionBuffer& Sprite::positionBuffer() const { return positionBuffer_; }
 
 void Sprite::enqueueDirectionChange(Direction newDirection,
                                     const std::shared_ptr<Sprite>& next) {
-  if (direction_ == newDirection) {
-    return;
-  }
-  direction_ = newDirection;
-  if (newDirection == Direction::Left || newDirection == Direction::Right) {
-    face_ = newDirection;
-  }
+  transform_.enqueueDirectionChange(newDirection, positionBuffer_);
   if (next) {
-    PositionBufferSlot slot{x_, y_, direction_};
+    PositionBufferSlot slot{transform_.x(), transform_.y(),
+                             transform_.direction()};
     next->positionBuffer().push(slot);
   }
 }
+
+// Direct component access
+TransformComponent& Sprite::transform() { return transform_; }
+const TransformComponent& Sprite::transform() const { return transform_; }
+HealthComponent& Sprite::health() { return health_; }
+const HealthComponent& Sprite::health() const { return health_; }
+RenderComponent& Sprite::render() { return render_; }
+const RenderComponent& Sprite::render() const { return render_; }
+CombatComponent& Sprite::combat() { return combat_; }
+const CombatComponent& Sprite::combat() const { return combat_; }

@@ -1,9 +1,11 @@
 #ifndef SNAKE_WEAPON_H_
 #define SNAKE_WEAPON_H_
 
+#include "adt.h"
 #include "types.h"
 
 #include <array>
+#include <functional>
 #include <memory>
 
 #define WEAPONS_SIZE 128
@@ -40,6 +42,41 @@ struct WeaponBuff {
   int duration = 0;
 };
 
+class Bullet;
+class Snake;
+class Weapon;
+class WeaponBehavior;
+
+struct WeaponAttackContext {
+  std::shared_ptr<Snake> attacker;
+  std::shared_ptr<Snake> target;
+  std::shared_ptr<Sprite> targetSprite;
+  std::shared_ptr<Sprite> attackerSprite;
+};
+
+struct WeaponAttackResult {
+  bool attacked = false;
+};
+
+class WeaponBehavior {
+ public:
+  virtual ~WeaponBehavior() = default;
+  virtual WeaponAttackResult attack(const Weapon& weapon,
+                                    const WeaponAttackContext& context) const = 0;
+  virtual void onAttack(const Weapon& weapon,
+                        const std::shared_ptr<Sprite>& sprite) const = 0;
+  virtual bool allowMultiTarget() const = 0;
+  virtual bool allowAreaImpact() const = 0;
+  virtual void applyImpact(const Weapon& weapon,
+                           const std::shared_ptr<Bullet>& bullet,
+                           const std::shared_ptr<Snake>& hitSnake,
+                           const std::shared_ptr<Sprite>& hitSprite) const = 0;
+  virtual void applyAreaImpact(const Weapon& weapon,
+                               const std::shared_ptr<Bullet>& bullet,
+                               const std::shared_ptr<Snake>& hitSnake,
+                               const std::shared_ptr<Sprite>& hitSprite) const = 0;
+};
+
 class Weapon {
  public:
   Weapon() = default;
@@ -67,6 +104,7 @@ class Weapon {
   int deathAudio() const;
   const std::array<WeaponBuff, BUFF_END>& effects() const;
   std::array<WeaponBuff, BUFF_END>& effects();
+  const WeaponBehavior& behavior() const;
 
   void setType(WeaponType type);
   void setShootRange(int shootRange);
@@ -79,6 +117,7 @@ class Weapon {
   void setFlyAnimation(const std::shared_ptr<Animation>& animation);
   void setBirthAudio(int audio);
   void setDeathAudio(int audio);
+  void setBehavior(const std::shared_ptr<WeaponBehavior>& behavior);
 
  private:
   WeaponType type_ = WeaponType::SwordPoint;
@@ -93,8 +132,10 @@ class Weapon {
   int birthAudio_ = -1;
   int deathAudio_ = -1;
   std::array<WeaponBuff, BUFF_END> effects_{};
+  std::shared_ptr<WeaponBehavior> behavior_{};
 };
 
 void initWeapons();
+std::shared_ptr<WeaponBehavior> makeWeaponBehavior(WeaponType type);
 
 #endif

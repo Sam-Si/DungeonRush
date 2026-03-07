@@ -15,6 +15,17 @@ struct Choice {
   Direction direction = Direction::Right;
 };
 
+class AIBehavior {
+ public:
+  virtual ~AIBehavior() = default;
+  virtual void updateInput(const std::shared_ptr<Snake>& snake) const = 0;
+};
+
+class DefaultAIBehavior final : public AIBehavior {
+ public:
+  void updateInput(const std::shared_ptr<Snake>& snake) const override;
+};
+
 void AiInput(const std::shared_ptr<Snake>& snake);
 int getPowerfulPlayer();
 
