@@ -2,6 +2,11 @@
 
 #include <memory>
 
+#include "ai.h"
+#include "audio.h"
+#include "bullet.h"
+#include "game.h"
+#include "helper.h"
 #include "render.h"
 #include "res.h"
 #include "types.h"
@@ -31,6 +36,183 @@ void initWeapon(Weapon& weapon, int birthTextureId, int deathTextureId,
 }
 }  // namespace
 
+namespace {
+void applyWeaponDamage(const std::shared_ptr<Snake>& src,
+                       const std::shared_ptr<Snake>& dest,
+                       const std::shared_ptr<Sprite>& target,
+                       const Weapon& weapon) {
+  GameContext& ctx = getGameContext();
+  if (!dest || !target) {
+    return;
+  }
+  double calcDamage = weapon.damage();
+  if (dest->buffs()[BUFF_FROZEN]) {
+    calcDamage *= GAME_FROZEN_DAMAGE_K;
+  }
+  if (src && src->team() != GAME_MONSTERS_TEAM) {
+    if (src->buffs()[BUFF_ATTACK]) {
+      calcDamage *= GAME_BUFF_ATTACK_K;
+    }
+  }
+  if (dest->team() != GAME_MONSTERS_TEAM) {
+    if (dest->buffs()[BUFF_DEFFENCE]) {
+      calcDamage /= GAME_BUFF_DEFENSE_K;
+    }
+  }
+  target->setHp(target->hp() - static_cast<int>(calcDamage));
+  if (src) {
+    src->score()->addDamage(static_cast<int>(calcDamage));
+    if (target->hp() <= 0) {
+      src->score()->addKilled(1);
+    }
+  }
+  dest->score()->addStand(weapon.damage());
+  ctx.buffManager.invokeWeaponBuff(src, weapon, dest, weapon.damage());
+}
+
+class SwordBehavior final : public WeaponBehavior {
+ public:
+  WeaponAttackResult attack(const Weapon& weapon,
+                            const WeaponAttackContext& context) const override {
+    if (!context.attacker || !context.target || !context.targetSprite ||
+        !context.attackerSprite) {
+      return {};
+    }
+    const double rad =
+        atan2(context.targetSprite->y() - context.attackerSprite->y(),
+              context.targetSprite->x() - context.attackerSprite->x());
+    if (const auto& deathAnimation = weapon.deathAnimation()) {
+      auto effect = std::make_shared<Animation>(*deathAnimation);
+      bindAnimationToSprite(effect, context.targetSprite, false);
+      if (effect->angle() != -1) {
+        effect->setAngle(rad * 180 / PI);
+      }
+      pushAnimationToRender(RENDER_LIST_EFFECT_ID, effect);
+    }
+    applyWeaponDamage(context.attacker, context.target, context.targetSprite,
+                      weapon);
+    return {.attacked = true};
+  }
+
+  void onAttack(const Weapon& weapon,
+                const std::shared_ptr<Sprite>& sprite) const override {
+    if (!sprite) {
+      return;
+    }
+    if (const auto& birthAnimation = weapon.birthAnimation()) {
+      auto effect = std::make_shared<Animation>(*birthAnimation);
+      bindAnimationToSprite(effect, sprite, true);
+      effect->setAt(At::BottomCenter);
+      pushAnimationToRender(RENDER_LIST_EFFECT_ID, effect);
+    }
+    playAudio(weapon.deathAudio());
+    sprite->setLastAttack(static_cast<int>(renderFrames()));
+  }
+
+  bool allowMultiTarget() const override { return true; }
+  bool allowAreaImpact() const override { return false; }
+
+  void applyImpact(const Weapon& weapon, const std::shared_ptr<Bullet>&,
+                   const std::shared_ptr<Snake>& hitSnake,
+                   const std::shared_ptr<Sprite>& hitSprite) const override {
+    if (!hitSnake || !hitSprite) {
+      return;
+    }
+    applyWeaponDamage(nullptr, hitSnake, hitSprite, weapon);
+  }
+
+  void applyAreaImpact(const Weapon& weapon, const std::shared_ptr<Bullet>&,
+                       const std::shared_ptr<Snake>& hitSnake,
+                       const std::shared_ptr<Sprite>& hitSprite) const override {
+    if (!hitSnake || !hitSprite) {
+      return;
+    }
+    applyWeaponDamage(nullptr, hitSnake, hitSprite, weapon);
+  }
+};
+
+class RangedBehavior final : public WeaponBehavior {
+ public:
+  explicit RangedBehavior(bool multiShot) : multiShot_(multiShot) {}
+
+  WeaponAttackResult attack(const Weapon& weapon,
+                            const WeaponAttackContext& context) const override {
+    if (!context.attacker || !context.attackerSprite || !context.targetSprite) {
+      return {};
+    }
+    const double rad =
+        atan2(context.targetSprite->y() - context.attackerSprite->y(),
+              context.targetSprite->x() - context.attackerSprite->x());
+    auto bullet = std::make_shared<Bullet>(context.attacker,
+                                           const_cast<Weapon*>(&weapon),
+                                           context.attackerSprite->x(),
+                                           context.attackerSprite->y(), rad,
+                                           context.attacker->team(),
+                                           weapon.flyAnimation());
+    GameContext& ctx = getGameContext();
+    ctx.entityManager.addBullet(bullet);
+    pushAnimationToRender(RENDER_LIST_EFFECT_ID, bullet->animation());
+    return {.attacked = true};
+  }
+
+  void onAttack(const Weapon& weapon,
+                const std::shared_ptr<Sprite>& sprite) const override {
+    if (!sprite) {
+      return;
+    }
+    if (const auto& birthAnimation = weapon.birthAnimation()) {
+      auto effect = std::make_shared<Animation>(*birthAnimation);
+      bindAnimationToSprite(effect, sprite, true);
+      effect->setAt(At::BottomCenter);
+      pushAnimationToRender(RENDER_LIST_EFFECT_ID, effect);
+    }
+    playAudio(weapon.birthAudio());
+    sprite->setLastAttack(static_cast<int>(renderFrames()));
+  }
+
+  bool allowMultiTarget() const override { return multiShot_; }
+  bool allowAreaImpact() const override { return true; }
+
+  void applyImpact(const Weapon& weapon, const std::shared_ptr<Bullet>& bullet,
+                   const std::shared_ptr<Snake>& hitSnake,
+                   const std::shared_ptr<Sprite>& hitSprite) const override {
+    if (!bullet || !hitSnake || !hitSprite) {
+      return;
+    }
+    applyWeaponDamage(bullet->owner(), hitSnake, hitSprite, weapon);
+  }
+
+  void applyAreaImpact(const Weapon& weapon, const std::shared_ptr<Bullet>& bullet,
+                       const std::shared_ptr<Snake>& hitSnake,
+                       const std::shared_ptr<Sprite>& hitSprite) const override {
+    if (!bullet || !hitSnake || !hitSprite) {
+      return;
+    }
+    applyWeaponDamage(bullet->owner(), hitSnake, hitSprite, weapon);
+  }
+
+ private:
+  bool multiShot_ = false;
+};
+
+class WeaponBehaviorFactory final {
+ public:
+  WeaponBehaviorFactory() = delete;
+  static std::shared_ptr<WeaponBehavior> makeBehavior(WeaponType type) {
+    if (type == WeaponType::SwordPoint || type == WeaponType::SwordRange) {
+      return std::make_shared<SwordBehavior>();
+    }
+    if (type == WeaponType::GunPoint || type == WeaponType::GunRange) {
+      return std::make_shared<RangedBehavior>(false);
+    }
+    if (type == WeaponType::GunPointMulti) {
+      return std::make_shared<RangedBehavior>(true);
+    }
+    return std::make_shared<SwordBehavior>();
+  }
+};
+}  // namespace
+
 Weapon::Weapon(WeaponType type, int shootRange, int effectRange, int damage,
                int gap, int bulletSpeed,
                const std::shared_ptr<Animation>& birthAnimation,
@@ -47,7 +229,8 @@ Weapon::Weapon(WeaponType type, int shootRange, int effectRange, int damage,
       deathAnimation_(deathAnimation),
       flyAnimation_(flyAnimation),
       birthAudio_(birthAudio),
-      deathAudio_(deathAudio) {}
+      deathAudio_(deathAudio),
+      behavior_(WeaponBehaviorFactory::makeBehavior(type)) {}
 
 WeaponType Weapon::type() const { return type_; }
 int Weapon::shootRange() const { return shootRange_; }
@@ -70,8 +253,14 @@ const std::array<WeaponBuff, BUFF_END>& Weapon::effects() const {
   return effects_;
 }
 std::array<WeaponBuff, BUFF_END>& Weapon::effects() { return effects_; }
+const WeaponBehavior& Weapon::behavior() const {
+  return behavior_ ? *behavior_ : *WeaponBehaviorFactory::makeBehavior(type_);
+}
 
-void Weapon::setType(WeaponType type) { type_ = type; }
+void Weapon::setType(WeaponType type) {
+  type_ = type;
+  behavior_ = WeaponBehaviorFactory::makeBehavior(type);
+}
 void Weapon::setShootRange(int shootRange) { shootRange_ = shootRange; }
 void Weapon::setEffectRange(int effectRange) { effectRange_ = effectRange; }
 void Weapon::setDamage(int damage) { damage_ = damage; }
@@ -88,6 +277,13 @@ void Weapon::setFlyAnimation(const std::shared_ptr<Animation>& animation) {
 }
 void Weapon::setBirthAudio(int audio) { birthAudio_ = audio; }
 void Weapon::setDeathAudio(int audio) { deathAudio_ = audio; }
+void Weapon::setBehavior(const std::shared_ptr<WeaponBehavior>& behavior) {
+  behavior_ = behavior;
+}
+
+std::shared_ptr<WeaponBehavior> makeWeaponBehavior(WeaponType type) {
+  return WeaponBehaviorFactory::makeBehavior(type);
+}
 
 Weapon weapons[WEAPONS_SIZE];
 

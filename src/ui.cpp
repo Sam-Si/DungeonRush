@@ -3,11 +3,11 @@
 #include <SDL.h>
 #include <SDL_mixer.h>
 #include <SDL_ttf.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
-#include <memory>
+
 #include <array>
+#include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "audio.h"
@@ -31,19 +31,266 @@ extern Effect effects[];
 int cursorPos;
 
 namespace {
-Text* createUiText(const std::string& text, SDL_Color color) {
+std::unique_ptr<Text> createUiText(const std::string& text, SDL_Color color) {
   SDL_Renderer* sdlRenderer = renderer();
   TTF_Font* ttfFont = font();
   if (!sdlRenderer || !ttfFont) {
     return nullptr;
   }
-  return new Text(text, color, sdlRenderer, ttfFont);
+  return std::make_unique<Text>(text, color, sdlRenderer, ttfFont);
 }
 
-void destroyUiText(Text* text) {
-  delete text;
+class GameStateManager;
+
+class GameState {
+ public:
+  GameState() = default;
+  GameState(const GameState&) = delete;
+  GameState& operator=(const GameState&) = delete;
+  GameState(GameState&&) = default;
+  GameState& operator=(GameState&&) = default;
+  virtual ~GameState() = default;
+
+  virtual void handleInput(GameStateManager& manager) = 0;
+  virtual void update(GameStateManager& manager) = 0;
+  virtual void render(GameStateManager& manager) = 0;
+};
+
+class GameStateManager {
+ public:
+  GameStateManager() = default;
+  GameStateManager(const GameStateManager&) = delete;
+  GameStateManager& operator=(const GameStateManager&) = delete;
+  GameStateManager(GameStateManager&&) = default;
+  GameStateManager& operator=(GameStateManager&&) = default;
+  ~GameStateManager() = default;
+
+  void setState(std::unique_ptr<GameState> state) {
+    currentState_ = std::move(state);
+  }
+
+  void clearState() {
+    currentState_.reset();
+    nextState_.reset();
+  }
+
+  void setNextState(std::unique_ptr<GameState> state) {
+    nextState_ = std::move(state);
+  }
+
+  void run() {
+    while (currentState_) {
+      currentState_->handleInput(*this);
+      currentState_->update(*this);
+      currentState_->render(*this);
+      if (nextState_) {
+        currentState_ = std::move(nextState_);
+      }
+    }
+  }
+
+ private:
+  std::unique_ptr<GameState> currentState_{};
+  std::unique_ptr<GameState> nextState_{};
+};
+
+class ExitState final : public GameState {
+ public:
+  void handleInput(GameStateManager& manager) override {
+    manager.clearState();
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+};
+
+class MainMenuState final : public GameState {
+ public:
+  void handleInput(GameStateManager& manager) override;
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+};
+
+class LocalRankListState final : public GameState {
+ public:
+  void handleInput(GameStateManager& manager) override {
+    localRankListUi();
+    manager.setNextState(std::make_unique<MainMenuState>());
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+};
+
+class LanGameState final : public GameState {
+ public:
+  void handleInput(GameStateManager& manager) override {
+    launchLanGame();
+    manager.setNextState(std::make_unique<MainMenuState>());
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+};
+
+class LocalGameState final : public GameState {
+ public:
+  explicit LocalGameState(int localPlayers) : localPlayers_(localPlayers) {}
+
+  void handleInput(GameStateManager& manager) override {
+    launchLocalGame(localPlayers_);
+    manager.setNextState(std::make_unique<MainMenuState>());
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+
+ private:
+  int localPlayers_ = 1;
+};
+
+class ChooseLevelState final : public GameState {
+ public:
+  explicit ChooseLevelState(int localPlayers) : localPlayers_(localPlayers) {}
+
+  void handleInput(GameStateManager& manager) override {
+    if (!chooseLevelUi()) {
+      manager.setNextState(std::make_unique<MainMenuState>());
+      return;
+    }
+    manager.setNextState(std::make_unique<LocalGameState>(localPlayers_));
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+
+ private:
+  int localPlayers_ = 1;
+};
+
+class ChooseModeState final : public GameState {
+ public:
+  void handleInput(GameStateManager& manager) override {
+    int mode = chooseOnLanUi();
+    if (mode == 0) {
+      manager.setNextState(std::make_unique<ChooseLevelState>(2));
+      return;
+    }
+    manager.setNextState(std::make_unique<LanGameState>());
+  }
+  void update(GameStateManager&) override {}
+  void render(GameStateManager&) override {}
+};
+
+void MainMenuState::handleInput(GameStateManager& manager) {
+  baseUi(30, 12);
+  playBgm(0);
+  const int startY = SCREEN_HEIGHT / 2 - 70;
+  const int startX = SCREEN_WIDTH / 5 + 32;
+  createAndPushAnimation(animationsList[RENDER_LIST_UI_ID],
+                         &textures[RES_TITLE], nullptr, LoopType::Infinite, 80,
+                         SCREEN_WIDTH / 2, 280, SDL_FLIP_NONE, 0, At::Center);
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_KNIGHT_M], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, startX, startY,
+                         SDL_FLIP_NONE, 0, At::BottomCenter);
+  auto swordFx = createAndPushAnimation(
+      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_SwordFx], nullptr,
+      LoopType::Infinite, SPRITE_ANIMATION_DURATION,
+      startX + UI_MAIN_GAP_ALT * 2, startY - 32, SDL_FLIP_NONE, 0,
+      At::BottomCenter);
+  if (swordFx) {
+    swordFx->setScaled(false);
+  }
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_CHORT], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION,
+                         startX + UI_MAIN_GAP_ALT * 2, startY - 32,
+                         SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
+
+  const int elfX = startX + UI_MAIN_GAP_ALT * (6 + 2 * randDouble());
+  const int elfY = startY + UI_MAIN_GAP * (1 + randDouble());
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_ELF_M], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, elfX, elfY,
+                         SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
+  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
+                         &textures[RES_HALO_EXPLOSION2], nullptr,
+                         LoopType::Infinite, SPRITE_ANIMATION_DURATION,
+                         elfX - UI_MAIN_GAP * 1.5, elfY, SDL_FLIP_NONE, 0,
+                         At::BottomCenter);
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_ZOMBIE], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, elfX - UI_MAIN_GAP * 1.5,
+                         elfY, SDL_FLIP_NONE, 0, At::BottomCenter);
+
+  const int wizardX = elfX - UI_MAIN_GAP_ALT * (1 + 2 * randDouble());
+  const int wizardY = elfY + UI_MAIN_GAP * (2 + randDouble());
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_WIZZARD_M], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, wizardX, wizardY,
+                         SDL_FLIP_NONE, 0, At::BottomCenter);
+  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
+                         &textures[RES_FIREBALL], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, wizardX + UI_MAIN_GAP,
+                         wizardY, SDL_FLIP_NONE, 0, At::BottomCenter);
+
+  const int lizardX = wizardX + UI_MAIN_GAP_ALT * (18 + 4 * randDouble());
+  const int lizardY = wizardY - UI_MAIN_GAP * (1 + 3 * randDouble());
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_LIZARD_M], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, lizardX, lizardY,
+                         SDL_FLIP_NONE, 0, At::BottomCenter);
+  createAndPushAnimation(
+      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_CLAWFX2], nullptr,
+      LoopType::Infinite, SPRITE_ANIMATION_DURATION, lizardX,
+      lizardY - UI_MAIN_GAP + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
+  createAndPushAnimation(
+      animationsList[RENDER_LIST_SPRITE_ID], &textures[RES_MUDDY], nullptr,
+      LoopType::Infinite, SPRITE_ANIMATION_DURATION, lizardX,
+      lizardY - UI_MAIN_GAP, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
+
+  createAndPushAnimation(
+      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_CLAWFX2], nullptr,
+      LoopType::Infinite, SPRITE_ANIMATION_DURATION, lizardX + UI_MAIN_GAP,
+      lizardY - UI_MAIN_GAP + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
+  createAndPushAnimation(
+      animationsList[RENDER_LIST_SPRITE_ID], &textures[RES_SWAMPY], nullptr,
+      LoopType::Infinite, SPRITE_ANIMATION_DURATION, lizardX + UI_MAIN_GAP,
+      lizardY - UI_MAIN_GAP, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
+
+  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
+                         &textures[RES_CLAWFX2], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, lizardX + UI_MAIN_GAP,
+                         lizardY + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
+  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
+                         &textures[RES_SWAMPY], nullptr, LoopType::Infinite,
+                         SPRITE_ANIMATION_DURATION, lizardX + UI_MAIN_GAP,
+                         lizardY, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
+
+  const int optsNum = 4;
+  std::vector<Text*> opts;
+  opts.reserve(optsNum);
+  for (int i = 0; i < optsNum; i++) {
+    opts.push_back(texts + i + 6);
+  }
+  const int opt = chooseOptions(optsNum, opts.data());
+
+  blackout();
+  clearRenderer();
+  switch (opt) {
+    case 0:
+      manager.setNextState(std::make_unique<ChooseLevelState>(1));
+      break;
+    case 1:
+      manager.setNextState(std::make_unique<ChooseModeState>());
+      break;
+    case 2:
+      manager.setNextState(std::make_unique<LocalRankListState>());
+      break;
+    case 3:
+    default:
+      manager.setNextState(std::make_unique<ExitState>());
+      break;
+  }
 }
-}
+}  // namespace
+
 bool moveCursor(int optsNum) {
   SDL_Event e;
   bool quit = false;
@@ -84,9 +331,9 @@ int chooseOptions(int optionsNum, Text** options) {
   auto player = std::make_shared<Snake>(2, 0, PlayerType::Local);
   appendSpriteToSnake(player, SPRITE_KNIGHT, SCREEN_WIDTH / 2,
                       SCREEN_HEIGHT / 2, Direction::Up);
-  int lineGap = FONT_SIZE + FONT_SIZE / 2,
-      totalHeight = lineGap * (optionsNum - 1);
-  int startY = (SCREEN_HEIGHT - totalHeight) / 2;
+  const int lineGap = FONT_SIZE + FONT_SIZE / 2;
+  const int totalHeight = lineGap * (optionsNum - 1);
+  const int startY = (SCREEN_HEIGHT - totalHeight) / 2;
   while (!moveCursor(optionsNum)) {
     auto head = player->sprites().empty() ? nullptr : player->sprites().front();
     if (head && head->animation()) {
@@ -117,11 +364,16 @@ void baseUi(int w, int h) {
 }
 bool chooseLevelUi() {
   baseUi(30, 12);
-  int optsNum = 3;
-  Text** opts = static_cast<Text**>(malloc(sizeof(Text*) * optsNum));
-  for (int i = 0; i < optsNum; i++) opts[i] = texts + i + 10;
-  int opt = chooseOptions(optsNum, opts);
-  if (opt != optsNum) setLevel(opt);
+  const int optsNum = 3;
+  std::vector<Text*> opts;
+  opts.reserve(optsNum);
+  for (int i = 0; i < optsNum; i++) {
+    opts.push_back(texts + i + 10);
+  }
+  const int opt = chooseOptions(optsNum, opts.data());
+  if (opt != optsNum) {
+    setLevel(opt);
+  }
   clearRenderer();
   return opt != optsNum;
 }
@@ -137,42 +389,43 @@ void launchLocalGame(int localPlayerNum) {
   for (int i = 0; i < localPlayerNum; i++) updateLocalRanklist(rawScores[i]);
 }
 int rangeOptions(int start, int end) {
-  int optsNum = end - start + 1;
-  Text** opts = static_cast<Text**>(malloc(sizeof(Text*) * optsNum));
-  for (int i = 0; i < optsNum; i++) opts[i] = texts + i + start;
-  int opt = chooseOptions(optsNum, opts);
-  free(opts);
+  const int optsNum = end - start + 1;
+  std::vector<Text*> opts;
+  opts.reserve(optsNum);
+  for (int i = 0; i < optsNum; i++) {
+    opts.push_back(texts + i + start);
+  }
+  const int opt = chooseOptions(optsNum, opts.data());
   return opt;
 }
 
-char* inputUi() {
-  const int MAX_LEN = 30;
+std::optional<std::string> inputUi() {
+  constexpr int kMaxLen = 30;
 
   baseUi(20, 10);
 
-  char* ret = static_cast<char*>(malloc(MAX_LEN));
-  int retLen = 0;
-  memset(ret, 0, MAX_LEN);
+  std::string ret;
+  ret.reserve(kMaxLen);
 
   extern SDL_Color WHITE;
-  Text* text = NULL;
-  Text* placeholder = createUiText("Enter IP", WHITE);
+  std::unique_ptr<Text> text(nullptr);
+  std::unique_ptr<Text> placeholder(createUiText("Enter IP", WHITE));
 
   SDL_StartTextInput();
   SDL_Event e;
   bool quit = false;
   bool finished = false;
   while (!quit && !finished) {
-    const Text* displayText = NULL;
-    if (ret[0]) {
+    const Text* displayText = nullptr;
+    if (!ret.empty()) {
       if (text) {
         text->setText(ret, renderer(), font());
       } else {
         text = createUiText(ret, WHITE);
       }
-      displayText = text;
+      displayText = text.get();
     } else {
-      displayText = placeholder;
+      displayText = placeholder.get();
     }
     renderCenteredText(displayText, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, 2);
     if (SDL_Renderer* sdlRenderer = renderer()) {
@@ -187,25 +440,25 @@ char* inputUi() {
         break;
       } else if (e.type == SDL_KEYDOWN) {
         if (e.key.keysym.sym == SDLK_BACKSPACE) {
-          if (retLen) ret[--retLen] = 0;
+          if (!ret.empty()) {
+            ret.pop_back();
+          }
         } else if (e.key.keysym.sym == SDLK_RETURN) {
           finished = true;
           break;
         }
       } else if (e.type == SDL_TEXTINPUT) {
-        strcpy(ret + retLen, e.text.text);
-        retLen += strlen(e.text.text);
+        if (ret.size() < kMaxLen) {
+          ret.append(e.text.text);
+        }
       }
     }
   }
 
   SDL_StopTextInput();
-  destroyUiText(placeholder);
-  destroyUiText(text);
 
   if (quit) {
-    free(ret);
-    return NULL;
+    return std::nullopt;
   }
 
   return ret;
@@ -219,10 +472,11 @@ void launchLanGame() {
   if (opt == 0) {
     hostGame();
   } else {
-    char* ip = inputUi();
-    if (ip == NULL) return;
-    joinGame(ip, LAN_LISTEN_PORT);
-    free(ip);
+    const auto ip = inputUi();
+    if (!ip.has_value()) {
+      return;
+    }
+    joinGame(ip->c_str(), LAN_LISTEN_PORT);
   }
 }
 
@@ -233,162 +487,35 @@ int chooseOnLanUi() {
   return opt;
 }
 
+namespace {
+void runUiStateMachine() {
+  GameStateManager manager;
+  manager.setState(std::make_unique<MainMenuState>());
+  manager.run();
+}
+}  // namespace
+
 void mainUi() {
-  baseUi(30, 12);
-  playBgm(0);
-  int startY = SCREEN_HEIGHT / 2 - 70;
-  int startX = SCREEN_WIDTH / 5 + 32;
-  createAndPushAnimation(animationsList[RENDER_LIST_UI_ID],
-                         &textures[RES_TITLE], nullptr, LoopType::Infinite, 80,
-                         SCREEN_WIDTH / 2, 280, SDL_FLIP_NONE, 0, At::Center);
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_KNIGHT_M], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX, startY,
-                         SDL_FLIP_NONE, 0, At::BottomCenter);
-  auto swordFx = createAndPushAnimation(
-      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_SwordFx], nullptr,
-      LoopType::Infinite, SPRITE_ANIMATION_DURATION,
-      startX + UI_MAIN_GAP_ALT * 2, startY - 32, SDL_FLIP_NONE, 0,
-      At::BottomCenter);
-  if (swordFx) {
-    swordFx->setScaled(false);
-  }
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_CHORT], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION,
-                         startX + UI_MAIN_GAP_ALT * 2, startY - 32,
-                         SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
-
-  startX += UI_MAIN_GAP_ALT * (6 + 2 * randDouble());
-  startY += UI_MAIN_GAP * (1 + randDouble());
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_ELF_M], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX, startY,
-                         SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
-  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
-                         &textures[RES_HALO_EXPLOSION2], nullptr,
-                         LoopType::Infinite, SPRITE_ANIMATION_DURATION,
-                         startX - UI_MAIN_GAP * 1.5, startY, SDL_FLIP_NONE, 0,
-                         At::BottomCenter);
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_ZOMBIE], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX - UI_MAIN_GAP * 1.5,
-                         startY, SDL_FLIP_NONE, 0, At::BottomCenter);
-
-  startX -= UI_MAIN_GAP_ALT * (1 + 2 * randDouble());
-  startY += UI_MAIN_GAP * (2 + randDouble());
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_WIZZARD_M], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX, startY,
-                         SDL_FLIP_NONE, 0, At::BottomCenter);
-  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
-                         &textures[RES_FIREBALL], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX + UI_MAIN_GAP,
-                         startY, SDL_FLIP_NONE, 0, At::BottomCenter);
-
-  startX += UI_MAIN_GAP_ALT * (18 + 4 * randDouble());
-  startY -= UI_MAIN_GAP * (1 + 3 * randDouble());
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_LIZARD_M], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX, startY,
-                         SDL_FLIP_NONE, 0, At::BottomCenter);
-  createAndPushAnimation(
-      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_CLAWFX2], nullptr,
-      LoopType::Infinite, SPRITE_ANIMATION_DURATION, startX,
-      startY - UI_MAIN_GAP + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
-  createAndPushAnimation(
-      animationsList[RENDER_LIST_SPRITE_ID], &textures[RES_MUDDY], nullptr,
-      LoopType::Infinite, SPRITE_ANIMATION_DURATION, startX,
-      startY - UI_MAIN_GAP, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
-
-  createAndPushAnimation(
-      animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_CLAWFX2], nullptr,
-      LoopType::Infinite, SPRITE_ANIMATION_DURATION, startX + UI_MAIN_GAP,
-      startY - UI_MAIN_GAP + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
-  createAndPushAnimation(
-      animationsList[RENDER_LIST_SPRITE_ID], &textures[RES_SWAMPY], nullptr,
-      LoopType::Infinite, SPRITE_ANIMATION_DURATION, startX + UI_MAIN_GAP,
-      startY - UI_MAIN_GAP, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
-
-  createAndPushAnimation(animationsList[RENDER_LIST_EFFECT_ID],
-                         &textures[RES_CLAWFX2], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX + UI_MAIN_GAP,
-                         startY + 16, SDL_FLIP_NONE, 0, At::BottomCenter);
-  createAndPushAnimation(animationsList[RENDER_LIST_SPRITE_ID],
-                         &textures[RES_SWAMPY], nullptr, LoopType::Infinite,
-                         SPRITE_ANIMATION_DURATION, startX + UI_MAIN_GAP,
-                         startY, SDL_FLIP_HORIZONTAL, 0, At::BottomCenter);
-  /*
-   startX = SCREEN_WIDTH/3*2;
-   startY = SCREEN_HEIGHT/3 + 10;
-   int colNum = 8;
-   for (int i = RES_TINY_ZOMBIE; i <= RES_CHORT; i+=2) {
-     int col = (i - RES_TINY_ZOMBIE)%colNum;
-     int row = (i - RES_TINY_ZOMBIE)/colNum;
-     createAndPushAnimation(&animationsList[RENDER_LIST_SPRITE_ID],
-                           &textures[i], NULL, LOOP_INFI,
-                           SPRITE_ANIMATION_DURATION, startX +
-   col*UI_MAIN_GAP_ALT, startY + row*UI_MAIN_GAP, SDL_FLIP_HORIZONTAL, 0,
-   AT_BOTTOM_CENTER);
-   }
-   for (int i = RES_BIG_ZOMBIE; i <= RES_BIG_DEMON; i+=2) {
-     createAndPushAnimation(&animationsList[RENDER_LIST_SPRITE_ID],
-                           &textures[i], NULL, LOOP_INFI,
-                           SPRITE_ANIMATION_DURATION, startX +
-   (i-RES_BIG_ZOMBIE)*UNIT, startY + 200, SDL_FLIP_HORIZONTAL, 0,
-   AT_BOTTOM_CENTER);
-   }
-   */
-  int optsNum = 4;
-  Text** opts = static_cast<Text**>(malloc(sizeof(Text*) * optsNum));
-  for (int i = 0; i < optsNum; i++) opts[i] = texts + i + 6;
-  int opt = chooseOptions(optsNum, opts);
-  free(opts);
-
-  blackout();
-  clearRenderer();
-  int lan;
-  switch (opt) {
-    case 0:
-      if (!chooseLevelUi()) break;
-      launchLocalGame(1);
-      break;
-    case 1:
-      lan = chooseOnLanUi();
-      if (lan == 0) {
-        if (!chooseLevelUi()) break;
-        launchLocalGame(2);
-      } else if (lan == 1) {
-        launchLanGame();
-      }
-      break;
-    case 2:
-      localRankListUi();
-      break;
-    case 3:
-      break;
-  }
-  if (opt == optsNum) return;
-  if (opt != 3) {
-    mainUi();
-  }
+  runUiStateMachine();
 }
 void rankListUi(int count, Score** scores) {
   baseUi(30, 12 + MAX(0, count - 4));
   playBgm(0);
-  Text** opts = static_cast<Text**>(malloc(sizeof(Text*) * count));
+  std::vector<std::unique_ptr<Text>> ownedTexts;
+  ownedTexts.reserve(count);
+  std::vector<Text*> opts;
+  opts.reserve(count);
   char buf[1 << 8];
   for (int i = 0; i < count; i++) {
     sprintf(buf, "Score: %-6.0lf Got: %-6d Kill: %-6d Damage: %-6d Stand: %-6d",
             scores[i]->rank(), scores[i]->got(), scores[i]->killed(),
             scores[i]->damage(), scores[i]->stand());
-    opts[i] = createUiText(buf, WHITE);
+    ownedTexts.push_back(createUiText(buf, WHITE));
+    opts.push_back(ownedTexts.back().get());
   }
 
-  chooseOptions(count, opts);
+  chooseOptions(count, opts.data());
 
-  for (int i = 0; i < count; i++) destroyUiText(opts[i]);
-  free(opts);
   blackout();
   clearRenderer();
 }

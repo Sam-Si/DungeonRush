@@ -1,5 +1,6 @@
 #include "ai.h"
 
+#include "game.h"
 #include "helper.h"
 #include "map.h"
 #include "res.h"
@@ -13,13 +14,10 @@ extern std::array<std::array<Item, MAP_SIZE>, MAP_SIZE> itemMap;
 extern bool hasMap[MAP_SIZE][MAP_SIZE];
 extern std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasEnemy;
 extern int spikeDamage;
-extern int playersCount;
 extern const int n, m;
 extern const int SCALE_FACTOR;
 
-// Sprite
-extern std::shared_ptr<Snake> spriteSnake[SPRITES_MAX_NUM];
-extern int spritesCount;
+// Use GameContext for entity access
 double AI_LOCK_LIMIT;
 
 int trapVerdict(const std::shared_ptr<Sprite>& sprite) {
@@ -47,14 +45,18 @@ int trapVerdict(const std::shared_ptr<Sprite>& sprite) {
 }
 
 int getPowerfulPlayer() {
+  GameContext& ctx = getGameContext();
   int maxNum = 0;
   int mxCount = 0;
   int id = -1;
-  for (int i = 0; i < playersCount; i++) {
-    if (!spriteSnake[i]) {
+  const int playerCount = ctx.entityManager.playerCount();
+  const int snakeCount = ctx.entityManager.snakeCount();
+  for (int i = 0; i < playerCount; i++) {
+    const auto& snake = ctx.entityManager.getSnake(i);
+    if (!snake) {
       continue;
     }
-    const int num = spriteSnake[i]->num();
+    const int num = snake->num();
     if (num > maxNum) {
       maxNum = num;
       mxCount = 1;
@@ -63,17 +65,20 @@ int getPowerfulPlayer() {
       mxCount++;
     }
   }
-  if (id == -1 || mxCount != 1 || !spriteSnake[id]) {
+  if (id == -1 || mxCount != 1) {
     return -1;
   }
-  return spriteSnake[id]->num() >= AI_LOCK_LIMIT ? id : -1;
+  const auto& snake = ctx.entityManager.getSnake(id);
+  return (snake && snake->num() >= AI_LOCK_LIMIT) ? id : -1;
 }
 
 int balanceVerdict(const std::shared_ptr<Sprite>& sprite, int id) {
-  if (id == -1 || !spriteSnake[id] || spriteSnake[id]->sprites().empty()) {
+  GameContext& ctx = getGameContext();
+  const auto& playerSnake = ctx.entityManager.getSnake(id);
+  if (id == -1 || !playerSnake || playerSnake->sprites().empty()) {
     return 0;
   }
-  const auto player = spriteSnake[id]->sprites().front();
+  const auto player = playerSnake->sprites().front();
   if (!player) {
     return 0;
   }
@@ -127,7 +132,8 @@ int compareChoiceByValue(const void* x, const void* y) {
   return b->value - a->value;
 }
 
-void AiInput(const std::shared_ptr<Snake>& snake) {
+void DefaultAIBehavior::updateInput(
+    const std::shared_ptr<Snake>& snake) const {
   if (!snake || snake->sprites().empty()) {
     return;
   }
@@ -174,4 +180,12 @@ void AiInput(const std::shared_ptr<Snake>& snake) {
       }
     }
   }
+}
+
+void AiInput(const std::shared_ptr<Snake>& snake) {
+  GameContext& ctx = getGameContext();
+  if (!ctx.aiBehavior) {
+    ctx.aiBehavior = std::make_shared<DefaultAIBehavior>();
+  }
+  ctx.aiBehavior->updateInput(snake);
 }
