@@ -22,7 +22,7 @@ find_package(SDL2_ttf REQUIRED)
 
 set(BIN_NAME dungeon_rush)
 
-file(GLOB SRC src/*.cpp src/*.c)
+file(GLOB_RECURSE SRC src/*.cpp src/*.c)
 
 add_executable(${BIN_NAME} ${SRC})
 

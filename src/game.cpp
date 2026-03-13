@@ -15,6 +15,7 @@
 #include "ai.h"
 #include "audio.h"
 #include "bullet.h"
+#include "factories/entity_factory.h"
 #include "helper.h"
 #include "map.h"
 #include "net.h"
@@ -122,6 +123,7 @@ namespace {
 GameContext g_gameContext;
 std::unique_ptr<AudioObserver> g_audioObserver;
 std::unique_ptr<UiObserver> g_uiObserver;
+std::unique_ptr<EntitySpawner> g_entitySpawner;
 }
 
 // Legacy global variables (delegating to GameContext)
@@ -358,6 +360,13 @@ void ItemManager::clearItems() {
 }
 
 void ItemManager::generateHeroItem(int x, int y) {
+  // Delegate to factory system when available
+  if (g_entitySpawner) {
+    itemMap_[x][y] = g_entitySpawner->spawnHeroItem(x, y);
+    return;
+  }
+  
+  // Fallback to legacy implementation
   const int heroId = randInt(SPRITE_KNIGHT, SPRITE_LIZARD);
   auto modelAnimation = commonSprites[heroId].animation();
   if (!modelAnimation) {
@@ -374,6 +383,21 @@ void ItemManager::generateHeroItem(int x, int y) {
 }
 
 void ItemManager::generateItem(int x, int y, ItemType type) {
+  // Delegate to factory system when available
+  if (g_entitySpawner) {
+    if (type == ItemType::Weapon) {
+      itemMap_[x][y] = g_entitySpawner->spawnWeaponItem(x, y);
+      return;
+    } else if (type == ItemType::HpMedicine) {
+      itemMap_[x][y] = g_entitySpawner->spawnFlaskItem(x, y, false);
+      return;
+    } else if (type == ItemType::HpExtraMedicine) {
+      itemMap_[x][y] = g_entitySpawner->spawnFlaskItem(x, y, true);
+      return;
+    }
+  }
+  
+  // Fallback to legacy implementation
   int textureId = RES_FLASK_BIG_RED, id = 0, belong = SPRITE_KNIGHT;
   if (type == ItemType::HpMedicine) {
     textureId = RES_FLASK_BIG_RED;
@@ -1312,7 +1336,11 @@ void dropItemNearSprite(const Sprite* sprite, ItemType itemType) {
       const int y = sprite->y() / UNIT + dy;
       if (inr(x, 0, n - 1) && inr(y, 0, m - 1) && hasMap[x][y] &&
           itemMap[x][y].type() == ItemType::None) {
-        generateItem(x, y, itemType);
+        if (g_entitySpawner && itemType == ItemType::Weapon) {
+          itemMap[x][y] = g_entitySpawner->spawnWeaponItem(x, y);
+        } else {
+          generateItem(x, y, itemType);
+        }
       }
       return;
     }
@@ -1341,17 +1369,39 @@ void clearItemMap() {
 void initItemMap(int hCount, int fCount) {
   int x = 0;
   int y = 0;
+  
+  // Use factory-based hero generation
   while (hCount--) {
-    generateHeroItemAllMap();
+    do {
+      x = randInt(1, n - 2);
+      y = randInt(1, m - 2);
+    } while (!hasMap[x][y] || map[x][y].type() != BlockType::Floor ||
+             itemMap[x][y].type() != ItemType::None ||
+             !hasMap[x - 1][y] + !hasMap[x + 1][y] + !hasMap[x][y + 1] +
+                     !hasMap[x][y - 1] >=
+                 1);
+    
+    if (g_entitySpawner) {
+      itemMap[x][y] = g_entitySpawner->spawnHeroItem(x, y);
+    } else {
+      generateHeroItem(x, y);
+    }
     herosCount++;
   }
+  
+  // Use factory-based flask generation
   while (fCount--) {
     do {
       x = randInt(0, n - 1);
       y = randInt(0, m - 1);
     } while (!hasMap[x][y] || map[x][y].type() != BlockType::Floor ||
              itemMap[x][y].type() != ItemType::None);
-    generateItem(x, y, ItemType::HpMedicine);
+    
+    if (g_entitySpawner) {
+      itemMap[x][y] = g_entitySpawner->spawnFlaskItem(x, y, false);
+    } else {
+      generateItem(x, y, ItemType::HpMedicine);
+    }
     flasksCount++;
   }
 }
@@ -1420,38 +1470,29 @@ void initEnemies(int enemiesCount) {
       hasEnemy[n / 2 + i][m / 2 + j] = 1;
     }
   }
-  for (int i = 0; i < enemiesCount;) {
-    const double random = randDouble() * GAME_MONSTERS_GEN_FACTOR;
-    const Point pos = getAvaliablePos();
-    const int x = pos.x;
-    const int y = pos.y;
-    int minLen = 2;
-    int maxLen = 4;
-    int step = 1;
-    int startId = SPRITE_TINY_ZOMBIE;
-    int endId = SPRITE_TINY_ZOMBIE;
-    if (random < 0.3) {
-      startId = SPRITE_TINY_ZOMBIE;
-      endId = SPRITE_SKELET;
-    } else if (random < 0.4) {
-      startId = SPRITE_WOGOL;
-      endId = SPRITE_CHROT;
-      step = 2;
-    } else if (random < 0.5) {
-      startId = SPRITE_ZOMBIE;
-      endId = SPRITE_ICE_ZOMBIE;
-    } else if (random < 0.8) {
-      startId = SPRITE_MUDDY;
-      endId = SPRITE_SWAMPY;
-    } else {
-      startId = SPRITE_MASKED_ORC;
-      endId = SPRITE_NECROMANCER;
-    }
-    i += generateEnemy(x, y, minLen, maxLen, startId, endId, step);
+  
+  // Use the new factory-based entity spawner
+  if (!g_entitySpawner) {
+    return;
   }
-  for (int bossCount = 0; bossCount < bossSetting; bossCount++) {
+  
+  for (int i = 0; i < enemiesCount;) {
     const Point pos = getAvaliablePos();
-    generateEnemy(pos.x, pos.y, 1, 1, SPRITE_BIG_ZOMBIE, SPRITE_BIG_DEMON, 1);
+    auto snake = g_entitySpawner->spawnMonster(pos.x, pos.y);
+    if (snake) {
+      spriteSnake[spritesCount++] = snake;
+      i += static_cast<int>(snake->sprites().size());
+    }
+  }
+  
+  // Spawn bosses
+  const auto& config = g_entitySpawner->getConfig();
+  for (int bossCount = 0; bossCount < config.bossCount; bossCount++) {
+    const Point pos = getAvaliablePos();
+    auto boss = g_entitySpawner->spawnBoss(pos.x, pos.y);
+    if (boss) {
+      spriteSnake[spritesCount++] = boss;
+    }
   }
 }
 
@@ -1472,6 +1513,11 @@ void initGame(int localPlayers, int remotePlayers, bool localFirst) {
   initRenderer();
   initCountDownBar();
 
+  // Initialize entity factory system
+  initializeEntityPrototypes();
+  g_entitySpawner = std::make_unique<EntitySpawner>();
+  g_entitySpawner->initializeLevel(gameLevel, stage);
+
   // create default hero at (w/2, h/2) (as well push ani)
   initializeEventObservers();
   for (int i = 0; i < localPlayers + remotePlayers; i++) {
@@ -1491,7 +1537,7 @@ void initGame(int localPlayers, int remotePlayers, bool localFirst) {
   initRandomMap(0.7, 7, GAME_TRAP_RATE);
 
   clearItemMap();
-  // create enemies
+  // create enemies using the new factory system
   initEnemies(spritesSetting);
   pushMapToRender();
   bullets.clear();
