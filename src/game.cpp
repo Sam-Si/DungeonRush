@@ -15,6 +15,8 @@
 #include "ai.h"
 #include "audio.h"
 #include "bullet.h"
+#include "core/game_state.h"
+#include "factories/entity_factory.h"
 #include "helper.h"
 #include "map.h"
 #include "net.h"
@@ -30,13 +32,22 @@
 #include <cassert>
 #endif
 
+// External resource references (these come from the resource system)
 extern const int SCALE_FACTOR;
 extern const int n, m;
-
 extern Texture textures[TEXTURES_SIZE];
+extern Effect effects[];
+extern Weapon weapons[WEAPONS_SIZE];
+extern Sprite commonSprites[COMMON_SPRITE_SIZE];
+extern std::array<AnimationList, ANIMATION_LINK_LIST_NUM> animationsList;
+extern bool hasMap[MAP_SIZE][MAP_SIZE];
+extern double AI_LOCK_LIMIT;
+
 const int MOVE_STEP = 2;
 
 namespace {
+
+// Helper to create game text
 std::unique_ptr<Text> createGameText(const std::string& text, SDL_Color color) {
   SDL_Renderer* sdlRenderer = renderer();
   TTF_Font* ttfFont = font();
@@ -46,6 +57,17 @@ std::unique_ptr<Text> createGameText(const std::string& text, SDL_Color color) {
   return std::make_unique<Text>(text, color, sdlRenderer, ttfFont);
 }
 
+// Forward declarations for observers
+class AudioObserver;
+class UiObserver;
+
+// Global game context - single source of truth for all game state
+GameContext g_gameContext;
+std::unique_ptr<AudioObserver> g_audioObserver;
+std::unique_ptr<UiObserver> g_uiObserver;
+std::unique_ptr<EntitySpawner> g_entitySpawner;
+
+// AudioObserver implementation
 class AudioObserver {
  public:
   explicit AudioObserver(EventBus& bus) : bus_(bus) {
@@ -67,6 +89,7 @@ class AudioObserver {
   EventBus& bus_;
 };
 
+// UiObserver implementation
 class UiObserver {
  public:
   explicit UiObserver(EventBus& bus) : bus_(bus) {
@@ -90,43 +113,21 @@ class UiObserver {
  private:
   EventBus& bus_;
 };
+
 }  // namespace
 
-void EventBus::subscribe(Listener listener) {
-  listeners_.push_back(std::move(listener));
-}
+// ============================================================================
+// Legacy Global Variable Definitions
+// These delegate to GameState data, maintaining backward compatibility.
+// New code should use getGameContext().state() directly.
+// ============================================================================
 
-void EventBus::emit(const GameEvent& event) const {
-  for (const auto& listener : listeners_) {
-    listener(event);
-  }
-}
+// Map data
+std::array<std::array<Block, MAP_SIZE>, MAP_SIZE> map{};
+std::array<std::array<Item, MAP_SIZE>, MAP_SIZE> itemMap{};
+std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasEnemy{};
 
-void EventBus::clear() {
-  listeners_.clear();
-}
-
-extern std::array<AnimationList, ANIMATION_LINK_LIST_NUM> animationsList;
-extern Effect effects[];
-
-extern Weapon weapons[WEAPONS_SIZE];
-extern Sprite commonSprites[COMMON_SPRITE_SIZE];
-
-// Map
-std::array<std::array<Block, MAP_SIZE>, MAP_SIZE> map;
-extern bool hasMap[MAP_SIZE][MAP_SIZE];
-int spikeDamage = 1;
-
-// Global game context
-namespace {
-GameContext g_gameContext;
-std::unique_ptr<AudioObserver> g_audioObserver;
-std::unique_ptr<UiObserver> g_uiObserver;
-}
-
-// Legacy global variables (delegating to GameContext)
-std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM> spriteSnake{};
-BulletList bullets;
+// Game configuration variables
 int gameLevel = 0;
 int stage = 0;
 int spritesCount = 0;
@@ -145,166 +146,72 @@ double GAME_LUCKY = 1.0;
 double GAME_DROPOUT_YELLOW_FLASKS = 0.3;
 double GAME_DROPOUT_WEAPONS = 0.7;
 double GAME_TRAP_RATE = 0.005;
-extern double AI_LOCK_LIMIT;
 double GAME_MONSTERS_HP_ADJUST = 1.0;
 double GAME_MONSTERS_WEAPON_BUFF_ADJUST = 1.0;
 double GAME_MONSTERS_GEN_FACTOR = 1.0;
-std::array<std::array<Item, MAP_SIZE>, MAP_SIZE> itemMap;
-std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasEnemy{};
+int spikeDamage = 1;
+
+// Entity arrays
+std::array<std::shared_ptr<Snake>, kMaxSprites> spriteSnake{};
+BulletList bullets;
+
+// ============================================================================
+// EventBus Implementation
+// ============================================================================
+void EventBus::subscribe(Listener listener) {
+  listeners_.push_back(std::move(listener));
+}
+
+void EventBus::emit(const GameEvent& event) const {
+  for (const auto& listener : listeners_) {
+    listener(event);
+  }
+}
+
+void EventBus::clear() {
+  listeners_.clear();
+}
+
+// ============================================================================
+// Global Accessors - Centralized state access
+// ============================================================================
+
+GameContext& getGameContext() {
+  return g_gameContext;
+}
+
+// Accessor functions for the new centralized state
+// These provide the preferred way to access game state: getGameContext().state()
+namespace snake {
+namespace core {
+
+// The global GameContext is defined in the anonymous namespace above
+// This function provides access to it
+GameContext& getGlobalGameContext() {
+  return g_gameContext;
+}
+
+}  // namespace core
+}  // namespace snake
 
 // ============================================================================
 // EntityManager Implementation
 // ============================================================================
 
-void EntityManager::addSnake(const std::shared_ptr<Snake>& snake) {
-  if (spritesCount_ < SPRITES_MAX_NUM) {
-    snakes_[spritesCount_++] = snake;
-  }
-}
-
-void EntityManager::removeSnake(int index) {
-  if (index >= 0 && index < spritesCount_) {
-    snakes_[index] = nullptr;
-  }
-}
-
-std::shared_ptr<Snake> EntityManager::getSnake(int index) const {
-  if (index >= 0 && index < SPRITES_MAX_NUM) {
-    return snakes_[index];
-  }
-  return nullptr;
-}
-
-int EntityManager::snakeCount() const {
-  return spritesCount_;
-}
-
-int EntityManager::playerCount() const {
-  return playersCount_;
-}
-
-void EntityManager::setPlayerCount(int count) {
-  playersCount_ = count;
-}
-
-void EntityManager::incrementSpriteCount() {
-  ++spritesCount_;
-}
-
-int EntityManager::spriteCount() const {
-  return spritesCount_;
-}
-
-void EntityManager::addBullet(const std::shared_ptr<Bullet>& bullet) {
-  bullets_.push_back(bullet);
-}
-
-void EntityManager::removeBullet(const std::shared_ptr<Bullet>& bullet) {
-  bullets_.remove(bullet);
-}
-
-BulletList& EntityManager::bullets() {
-  return bullets_;
-}
-
-const BulletList& EntityManager::bullets() const {
-  return bullets_;
-}
-
-std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM>& EntityManager::snakes() {
-  return snakes_;
-}
-
-const std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM>& EntityManager::snakes() const {
-  return snakes_;
-}
-
-void EntityManager::clear() {
-  for (int i = 0; i < SPRITES_MAX_NUM; ++i) {
-    snakes_[i] = nullptr;
-  }
-  bullets_.clear();
-  spritesCount_ = 0;
-  playersCount_ = 0;
-}
+// These have been moved to src/entities/entity_manager.cpp
 
 // ============================================================================
 // CollisionManager Implementation
 // ============================================================================
 
-bool CollisionManager::checkCrush(const std::shared_ptr<Sprite>& sprite,
-                                   bool loose, bool useAnimationBox,
-                                   EntityManager& entityManager) {
-  if (!sprite) {
-    return false;
-  }
-  const int x = sprite->x();
-  const int y = sprite->y();
-  SDL_Rect block;
-  SDL_Rect box = useAnimationBox ? getSpriteAnimationBox(sprite.get())
-                                 : getSpriteFeetBox(sprite.get());
-
-  // If the sprite is out of the map, then consider it as crushed
-  if (!inr(x / UNIT, 0, n - 1) || !inr(y / UNIT, 0, m - 1)) {
-    return true;
-  }
-  // Loop over the cells nearby the sprite to know better if it falls out of map
-  for (int dx = -1; dx <= 1; dx++) {
-    for (int dy = -1; dy <= 1; dy++) {
-      int xx = x / UNIT + dx, yy = y / UNIT + dy;
-      if (inr(xx, 0, n - 1) && inr(yy, 0, m - 1)) {
-        block = getMapRect(xx, yy);
-        if (RectRectCross(&box, &block) && !hasMap[xx][yy]) {
-          return true;
-        }
-      }
-    }
-  }
-
-  // If it has crushed on other sprites
-  const int count = entityManager.snakeCount();
-  for (int i = 0; i < count; i++) {
-    const auto& snake = entityManager.getSnake(i);
-    if (!snake) {
-      continue;
-    }
-    bool self = false;
-    for (const auto& other : snake->sprites()) {
-      if (!other) {
-        continue;
-      }
-      if (other.get() != sprite.get()) {
-        SDL_Rect otherBox = useAnimationBox ? getSpriteAnimationBox(other.get())
-                                            : getSpriteFeetBox(other.get());
-        if (RectRectCross(&box, &otherBox)) {
-          if ((self && loose)) {
-            // continue checking
-          } else {
-            return true;
-          }
-        }
-      } else {
-        self = true;
-      }
-    }
-  }
-  return false;
-}
-
-bool CollisionManager::isPlayer(const std::shared_ptr<Snake>& snake,
-                                 EntityManager& entityManager) const {
-  const int playerCount = entityManager.playerCount();
-  for (int i = 0; i < playerCount; i++) {
-    if (snake && snake == entityManager.getSnake(i)) {
-      return true;
-    }
-  }
-  return false;
-}
+// These have been moved to src/systems/collision_manager.cpp
 
 // ============================================================================
 // ItemManager Implementation
 // ============================================================================
+
+namespace snake {
+namespace systems {
 
 void ItemManager::initItems(int heroCount, int flaskCount) {
   int x = 0;
@@ -358,6 +265,13 @@ void ItemManager::clearItems() {
 }
 
 void ItemManager::generateHeroItem(int x, int y) {
+  // Delegate to factory system when available
+  if (g_entitySpawner) {
+    itemMap_[x][y] = g_entitySpawner->spawnHeroItem(x, y);
+    return;
+  }
+  
+  // Fallback to legacy implementation
   const int heroId = randInt(SPRITE_KNIGHT, SPRITE_LIZARD);
   auto modelAnimation = commonSprites[heroId].animation();
   if (!modelAnimation) {
@@ -374,6 +288,21 @@ void ItemManager::generateHeroItem(int x, int y) {
 }
 
 void ItemManager::generateItem(int x, int y, ItemType type) {
+  // Delegate to factory system when available
+  if (g_entitySpawner) {
+    if (type == ItemType::Weapon) {
+      itemMap_[x][y] = g_entitySpawner->spawnWeaponItem(x, y);
+      return;
+    } else if (type == ItemType::HpMedicine) {
+      itemMap_[x][y] = g_entitySpawner->spawnFlaskItem(x, y, false);
+      return;
+    } else if (type == ItemType::HpExtraMedicine) {
+      itemMap_[x][y] = g_entitySpawner->spawnFlaskItem(x, y, true);
+      return;
+    }
+  }
+  
+  // Fallback to legacy implementation
   int textureId = RES_FLASK_BIG_RED, id = 0, belong = SPRITE_KNIGHT;
   if (type == ItemType::HpMedicine) {
     textureId = RES_FLASK_BIG_RED;
@@ -432,7 +361,7 @@ void ItemManager::dropItemNearSprite(const Sprite* sprite, ItemType itemType) {
 }
 
 bool ItemManager::checkItemPickup(const std::shared_ptr<Snake>& snake,
-                                   EntityManager& entityManager) {
+                                   snake::entities::EntityManager& entityManager) {
   // This is handled in makeSnakeCross for now
   // Will be fully migrated in future refactoring
   return false;
@@ -462,221 +391,14 @@ void ItemManager::setFlaskCount(int count) {
   flasksCount_ = count;
 }
 
+}  // namespace systems
+}  // namespace snake
+
 // ============================================================================
 // BuffManager Implementation
 // ============================================================================
 
-void BuffManager::freezeSnake(Snake* snake, int duration) {
-  if (!snake) {
-    return;
-  }
-  auto& buffs = snake->buffs();
-  if (buffs[BUFF_FROZEN]) {
-    return;
-  }
-  if (!buffs[BUFF_DEFFENCE]) {
-    buffs[BUFF_FROZEN] += duration;
-  }
-  std::shared_ptr<Effect> effect;
-  if (buffs[BUFF_DEFFENCE]) {
-    effect = std::make_shared<Effect>(effects[EFFECT_VANISH30]);
-    duration = 30;
-  }
-  for (const auto& sprite : snake->sprites()) {
-    if (!sprite) {
-      continue;
-    }
-    const Effect* effectPtr = effect ? effect.get() : nullptr;
-    auto animation = createAndPushAnimation(
-        animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_ICE], effectPtr,
-        LoopType::Once, duration, sprite->x(), sprite->y(), SDL_FLIP_NONE, 0,
-        At::BottomCenter);
-    animation->setScaled(false);
-    if (buffs[BUFF_DEFFENCE]) {
-      continue;
-    }
-    bindAnimationToSprite(animation, sprite, true);
-  }
-}
-
-void BuffManager::slowDownSnake(Snake* snake, int duration) {
-  if (!snake) {
-    return;
-  }
-  auto& buffs = snake->buffs();
-  if (buffs[BUFF_SLOWDOWN]) {
-    return;
-  }
-  if (!buffs[BUFF_DEFFENCE]) {
-    buffs[BUFF_SLOWDOWN] += duration;
-  }
-  std::shared_ptr<Effect> effect;
-  if (buffs[BUFF_DEFFENCE]) {
-    effect = std::make_shared<Effect>(effects[EFFECT_VANISH30]);
-    duration = 30;
-  }
-  for (const auto& sprite : snake->sprites()) {
-    if (!sprite) {
-      continue;
-    }
-    const Effect* effectPtr = effect ? effect.get() : nullptr;
-    auto animation = createAndPushAnimation(
-        animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_SOLIDFX], effectPtr,
-        LoopType::Lifespan, 40, sprite->x(), sprite->y(), SDL_FLIP_NONE, 0,
-        At::BottomCenter);
-    animation->setLifeSpan(duration);
-    animation->setScaled(false);
-    if (buffs[BUFF_DEFFENCE]) {
-      continue;
-    }
-    bindAnimationToSprite(animation, sprite, true);
-  }
-}
-
-void BuffManager::shieldSnake(const std::shared_ptr<Snake>& snake, int duration) {
-  if (!snake) {
-    return;
-  }
-  auto& buffs = snake->buffs();
-  if (buffs[BUFF_DEFFENCE]) {
-    return;
-  }
-  buffs[BUFF_DEFFENCE] += duration;
-  for (const auto& sprite : snake->sprites()) {
-    if (sprite) {
-      auto animation = createAndPushAnimation(
-          animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_HOLY_SHIELD], nullptr,
-          LoopType::Lifespan, 40, sprite->x(), sprite->y(), SDL_FLIP_NONE, 0,
-          At::BottomCenter);
-      bindAnimationToSprite(animation, sprite, true);
-      animation->setLifeSpan(duration);
-    }
-  }
-}
-
-void BuffManager::attackUpSnake(const std::shared_ptr<Snake>& snake, int duration) {
-  if (!snake) {
-    return;
-  }
-  auto& buffs = snake->buffs();
-  if (buffs[BUFF_ATTACK]) {
-    return;
-  }
-  buffs[BUFF_ATTACK] += duration;
-  for (const auto& sprite : snake->sprites()) {
-    if (sprite) {
-      auto animation = createAndPushAnimation(
-          animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_ATTACK_UP], nullptr,
-          LoopType::Lifespan, SPRITE_ANIMATION_DURATION, sprite->x(), sprite->y(),
-          SDL_FLIP_NONE, 0, At::BottomCenter);
-      bindAnimationToSprite(animation, sprite, true);
-      animation->setLifeSpan(duration);
-    }
-  }
-}
-
-void BuffManager::updateBuffDurations(EntityManager& entityManager) {
-  const int count = entityManager.snakeCount();
-  for (int i = 0; i < count; i++) {
-    const auto& snake = entityManager.getSnake(i);
-    if (!snake) {
-      continue;
-    }
-    auto& buffs = snake->buffs();
-    for (int j = BUFF_BEGIN; j < BUFF_END; j++) {
-      if (buffs[j] > 0) {
-        buffs[j]--;
-      }
-    }
-  }
-}
-
-namespace {
-class BuffEffectStrategy {
- public:
-  virtual ~BuffEffectStrategy() = default;
-  virtual void apply(const std::shared_ptr<Snake>& source,
-                     const std::shared_ptr<Snake>& target,
-                     int duration,
-                     BuffManager& manager) const = 0;
-};
-
-class FrozenBuffStrategy final : public BuffEffectStrategy {
- public:
-  void apply(const std::shared_ptr<Snake>&,
-             const std::shared_ptr<Snake>& target,
-             int duration,
-             BuffManager& manager) const override {
-    manager.freezeSnake(target.get(), duration);
-  }
-};
-
-class SlowdownBuffStrategy final : public BuffEffectStrategy {
- public:
-  void apply(const std::shared_ptr<Snake>&,
-             const std::shared_ptr<Snake>& target,
-             int duration,
-             BuffManager& manager) const override {
-    manager.slowDownSnake(target.get(), duration);
-  }
-};
-
-class DefenseBuffStrategy final : public BuffEffectStrategy {
- public:
-  void apply(const std::shared_ptr<Snake>& source,
-             const std::shared_ptr<Snake>&,
-             int duration,
-             BuffManager& manager) const override {
-    if (source) {
-      manager.shieldSnake(source, duration);
-    }
-  }
-};
-
-class AttackBuffStrategy final : public BuffEffectStrategy {
- public:
-  void apply(const std::shared_ptr<Snake>& source,
-             const std::shared_ptr<Snake>&,
-             int duration,
-             BuffManager& manager) const override {
-    if (source) {
-      manager.attackUpSnake(source, duration);
-    }
-  }
-};
-
-const std::array<std::unique_ptr<BuffEffectStrategy>, BUFF_END>&
-    getBuffStrategies() {
-  static const std::array<std::unique_ptr<BuffEffectStrategy>, BUFF_END>
-      kStrategies = {std::make_unique<FrozenBuffStrategy>(),
-                     std::make_unique<SlowdownBuffStrategy>(),
-                     std::make_unique<DefenseBuffStrategy>(),
-                     std::make_unique<AttackBuffStrategy>()};
-  return kStrategies;
-}
-}  // namespace
-
-void BuffManager::invokeWeaponBuff(const std::shared_ptr<Snake>& src,
-                                    const Weapon& weapon,
-                                    const std::shared_ptr<Snake>& dest,
-                                    int) {
-  if (!dest) {
-    return;
-  }
-  double random = 0.0;
-  const auto& effects = weapon.effects();
-  const auto& strategies = getBuffStrategies();
-  for (int i = BUFF_BEGIN; i < BUFF_END; i++) {
-    random = randDouble();
-    if (src && src->team() == GAME_MONSTERS_TEAM) {
-      random *= GAME_MONSTERS_WEAPON_BUFF_ADJUST;
-    }
-    const auto& strategy = strategies[i];
-    if (strategy && random < effects[i].chance) {
-      strategy->apply(src, dest, effects[i].duration, *this);
-    }
-  }
-}
+// These have been moved to src/systems/buff_manager.cpp
 
 // ============================================================================
 // GameContext Implementation
@@ -685,63 +407,75 @@ void BuffManager::invokeWeaponBuff(const std::shared_ptr<Snake>& src,
 void GameContext::reset() {
   entityManager.clear();
   itemManager.clearItems();
-  hasEnemy.fill({});
-  gameLevel = 0;
-  stage = 0;
-  status = 0;
-  termCount = 0;
-  willTerm = false;
+  ::hasEnemy.fill({});
+  ::gameLevel = 0;
+  ::stage = 0;
+  ::status = 0;
+  ::termCount = 0;
+  ::willTerm = false;
 }
 
 void GameContext::setLevel(int level) {
-  gameLevel = level;
-  spritesSetting = 25;
-  bossSetting = 2;
-  herosSetting = 8;
-  flasksSetting = 6;
-  gameLucky = 1;
-  dropoutYellowFlasks = 0.3;
-  dropoutWeapons = 0.7;
-  trapRate = 0.005 * (level + 1);
-  monstersHpAdjust = 1 + level * 0.8 + stage * level * 0.1;
-  monstersGenFactor = 1 + level * 0.5 + stage * level * 0.05;
-  monstersWeaponBuffAdjust = 1 + level * 0.8 + stage * level * 0.02;
-  AI_LOCK_LIMIT = MAX(1, 7 - level * 2 - stage / 2);
-  winNum = 10 + level * 5 + stage * 3;
-  
+  ::gameLevel = level;
+  ::spritesSetting = 25;
+  ::bossSetting = 2;
+  ::herosSetting = 8;
+  ::flasksSetting = 6;
+  ::GAME_LUCKY = 1;
+  ::GAME_DROPOUT_YELLOW_FLASKS = 0.3;
+  ::GAME_DROPOUT_WEAPONS = 0.7;
+  ::GAME_TRAP_RATE = 0.005 * (level + 1);
+  ::GAME_MONSTERS_HP_ADJUST = 1 + level * 0.8 + ::stage * level * 0.1;
+  ::GAME_MONSTERS_GEN_FACTOR = 1 + level * 0.5 + ::stage * level * 0.05;
+  ::GAME_MONSTERS_WEAPON_BUFF_ADJUST = 1 + level * 0.8 + ::stage * level * 0.02;
+  AI_LOCK_LIMIT = MAX(1, 7 - level * 2 - ::stage / 2);
+  ::GAME_WIN_NUM = 10 + level * 5 + ::stage * 3;
+
   if (level == 1) {
-    dropoutWeapons = 0.98;
-    herosSetting = 5;
-    flasksSetting = 4;
-    spritesSetting = 28;
-    bossSetting = 3;
+    ::GAME_DROPOUT_WEAPONS = 0.98;
+    ::herosSetting = 5;
+    ::flasksSetting = 4;
+    ::spritesSetting = 28;
+    ::bossSetting = 3;
   } else if (level == 2) {
-    dropoutWeapons = 0.98;
-    dropoutYellowFlasks = 0.3;
-    spritesSetting = 28;
-    herosSetting = 5;
-    flasksSetting = 3;
-    bossSetting = 5;
+    ::GAME_DROPOUT_WEAPONS = 0.98;
+    ::GAME_DROPOUT_YELLOW_FLASKS = 0.3;
+    ::spritesSetting = 28;
+    ::herosSetting = 5;
+    ::flasksSetting = 3;
+    ::bossSetting = 5;
   }
-  spritesSetting += stage / 2 * (level + 1);
-  bossSetting += stage / 3;
+  ::spritesSetting += ::stage / 2 * (level + 1);
+  ::bossSetting += ::stage / 3;
 }
 
 void GameContext::initEnemies() {
-  for (auto& row : hasEnemy) {
+  for (auto& row : ::hasEnemy) {
     row.fill(false);
   }
   for (int i = -2; i <= 2; i++) {
     for (int j = -2; j <= 2; j++) {
-      hasEnemy[n / 2 + i][m / 2 + j] = true;
+      ::hasEnemy[n / 2 + i][m / 2 + j] = true;
     }
   }
 }
 
-// Global accessor
-GameContext& getGameContext() {
-  return g_gameContext;
-}
+// Global accessor - defined earlier in the file, just declare extern here
+// GameContext& getGameContext() is defined at line 179
+
+// GameContext convenience accessor implementations
+int GameContext::gameLevel() const { return ::gameLevel; }
+int& GameContext::gameLevel() { return ::gameLevel; }
+int GameContext::stage() const { return ::stage; }
+int& GameContext::stage() { return ::stage; }
+int GameContext::status() const { return ::status; }
+int& GameContext::status() { return ::status; }
+bool GameContext::willTerm() const { return ::willTerm; }
+bool& GameContext::willTerm() { return ::willTerm; }
+int GameContext::termCount() const { return ::termCount; }
+int& GameContext::termCount() { return ::termCount; }
+int GameContext::winNum() const { return ::GAME_WIN_NUM; }
+int& GameContext::winNum() { return ::GAME_WIN_NUM; }
 
 void initializeEventObservers() {
   if (!g_audioObserver) {
@@ -792,9 +526,9 @@ void GameLoopManager::setTerm(GameContext& ctx, int status) {
     getGameContext().eventBus.emit(
         {GameEventType::SoundRequested, -1, ItemType::None, AUDIO_LOSE});
   }
-  ctx.status = status;
-  ctx.willTerm = true;
-  ctx.termCount = RENDER_TERM_COUNT;
+  ctx.status() = status;
+  ctx.willTerm() = true;
+  ctx.termCount() = RENDER_TERM_COUNT;
 }
 
 bool GameLoopManager::isWin(const GameContext& ctx) const {
@@ -803,7 +537,7 @@ bool GameLoopManager::isWin(const GameContext& ctx) const {
     return false;
   }
   const auto& snake = ctx.entityManager.getSnake(0);
-  return snake && snake->num() >= ctx.winNum;
+  return snake && snake->num() >= ctx.winNum();
 }
 
 bool GameLoopManager::handleLocalKeypress(GameContext& ctx) {
@@ -975,8 +709,8 @@ void GameLoopManager::cleanupDeadEntities(GameContext& ctx) {
 }
 
 void GameLoopManager::checkWinCondition(GameContext& ctx) {
-  if (ctx.willTerm) {
-    ctx.termCount--;
+  if (ctx.willTerm()) {
+    ctx.termCount()--;
     return;
   }
   
@@ -1055,14 +789,14 @@ int GameLoopManager::run(GameContext& ctx) {
     
     checkWinCondition(ctx);
     
-    if (ctx.willTerm) {
-      ctx.termCount--;
-      if (!ctx.termCount) {
+    if (ctx.willTerm()) {
+      ctx.termCount()--;
+      if (!ctx.termCount()) {
         break;
       }
     }
   }
-  return ctx.status;
+  return ctx.status();
 }
 
 // Legacy function implementations (delegating to managers where appropriate)
@@ -1133,39 +867,40 @@ void appendSpriteToSnake(const std::shared_ptr<Snake>& snake, int spriteId,
   snake->incrementNum();
   snake->score()->addGot(1);
 
-  std::shared_ptr<Sprite> snakeHead = nullptr;
+  std::shared_ptr<Sprite> lastSprite = nullptr;
   if (!snake->sprites().empty()) {
-    snakeHead = snake->sprites().front();
-    x = snakeHead->x();
-    y = snakeHead->y();
+    lastSprite = snake->sprites().back();
+    x = lastSprite->x();
+    y = lastSprite->y();
     const int delta =
-        (snakeHead->animation()->origin()->width() * SCALE_FACTOR +
+        (lastSprite->animation()->origin()->width() * SCALE_FACTOR +
          commonSprites[spriteId].animation()->origin()->width() * SCALE_FACTOR) /
         2;
-    if (snakeHead->direction() == Direction::Left) {
-      x -= delta;
-    } else if (snakeHead->direction() == Direction::Right) {
+    if (lastSprite->direction() == Direction::Left) {
       x += delta;
-    } else if (snakeHead->direction() == Direction::Up) {
-      y -= delta;
-    } else {
+    } else if (lastSprite->direction() == Direction::Right) {
+      x -= delta;
+    } else if (lastSprite->direction() == Direction::Up) {
       y += delta;
+    } else {
+      y -= delta;
     }
+    direction = lastSprite->direction();
   }
   const auto sprite = std::make_shared<Sprite>(commonSprites[spriteId], x, y);
   sprite->setDirection(direction);
   if (direction == Direction::Left) {
     sprite->setFace(Direction::Left);
   }
-  if (snakeHead) {
-    sprite->setDirection(snakeHead->direction());
-    sprite->setFace(snakeHead->face());
-    if (snakeHead->animation()) {
+  if (lastSprite) {
+    sprite->setDirection(lastSprite->direction());
+    sprite->setFace(lastSprite->face());
+    if (lastSprite->animation()) {
       sprite->animation()->setCurrentFrame(
-          snakeHead->animation()->currentFrame());
+          lastSprite->animation()->currentFrame());
     }
   }
-  snake->sprites().push_front(sprite);
+  snake->sprites().push_back(sprite);
 
   if (sprite->animation()) {
     pushAnimationToRender(RENDER_LIST_SPRITE_ID, sprite->animation());
@@ -1312,7 +1047,11 @@ void dropItemNearSprite(const Sprite* sprite, ItemType itemType) {
       const int y = sprite->y() / UNIT + dy;
       if (inr(x, 0, n - 1) && inr(y, 0, m - 1) && hasMap[x][y] &&
           itemMap[x][y].type() == ItemType::None) {
-        generateItem(x, y, itemType);
+        if (g_entitySpawner && itemType == ItemType::Weapon) {
+          itemMap[x][y] = g_entitySpawner->spawnWeaponItem(x, y);
+        } else {
+          generateItem(x, y, itemType);
+        }
       }
       return;
     }
@@ -1341,17 +1080,39 @@ void clearItemMap() {
 void initItemMap(int hCount, int fCount) {
   int x = 0;
   int y = 0;
+  
+  // Use factory-based hero generation
   while (hCount--) {
-    generateHeroItemAllMap();
+    do {
+      x = randInt(1, n - 2);
+      y = randInt(1, m - 2);
+    } while (!hasMap[x][y] || map[x][y].type() != BlockType::Floor ||
+             itemMap[x][y].type() != ItemType::None ||
+             !hasMap[x - 1][y] + !hasMap[x + 1][y] + !hasMap[x][y + 1] +
+                     !hasMap[x][y - 1] >=
+                 1);
+    
+    if (g_entitySpawner) {
+      itemMap[x][y] = g_entitySpawner->spawnHeroItem(x, y);
+    } else {
+      generateHeroItem(x, y);
+    }
     herosCount++;
   }
+  
+  // Use factory-based flask generation
   while (fCount--) {
     do {
       x = randInt(0, n - 1);
       y = randInt(0, m - 1);
     } while (!hasMap[x][y] || map[x][y].type() != BlockType::Floor ||
              itemMap[x][y].type() != ItemType::None);
-    generateItem(x, y, ItemType::HpMedicine);
+    
+    if (g_entitySpawner) {
+      itemMap[x][y] = g_entitySpawner->spawnFlaskItem(x, y, false);
+    } else {
+      generateItem(x, y, ItemType::HpMedicine);
+    }
     flasksCount++;
   }
 }
@@ -1420,38 +1181,29 @@ void initEnemies(int enemiesCount) {
       hasEnemy[n / 2 + i][m / 2 + j] = 1;
     }
   }
-  for (int i = 0; i < enemiesCount;) {
-    const double random = randDouble() * GAME_MONSTERS_GEN_FACTOR;
-    const Point pos = getAvaliablePos();
-    const int x = pos.x;
-    const int y = pos.y;
-    int minLen = 2;
-    int maxLen = 4;
-    int step = 1;
-    int startId = SPRITE_TINY_ZOMBIE;
-    int endId = SPRITE_TINY_ZOMBIE;
-    if (random < 0.3) {
-      startId = SPRITE_TINY_ZOMBIE;
-      endId = SPRITE_SKELET;
-    } else if (random < 0.4) {
-      startId = SPRITE_WOGOL;
-      endId = SPRITE_CHROT;
-      step = 2;
-    } else if (random < 0.5) {
-      startId = SPRITE_ZOMBIE;
-      endId = SPRITE_ICE_ZOMBIE;
-    } else if (random < 0.8) {
-      startId = SPRITE_MUDDY;
-      endId = SPRITE_SWAMPY;
-    } else {
-      startId = SPRITE_MASKED_ORC;
-      endId = SPRITE_NECROMANCER;
-    }
-    i += generateEnemy(x, y, minLen, maxLen, startId, endId, step);
+  
+  // Use the new factory-based entity spawner
+  if (!g_entitySpawner) {
+    return;
   }
-  for (int bossCount = 0; bossCount < bossSetting; bossCount++) {
+  
+  for (int i = 0; i < enemiesCount;) {
     const Point pos = getAvaliablePos();
-    generateEnemy(pos.x, pos.y, 1, 1, SPRITE_BIG_ZOMBIE, SPRITE_BIG_DEMON, 1);
+    auto snake = g_entitySpawner->spawnMonster(pos.x, pos.y);
+    if (snake) {
+      spriteSnake[spritesCount++] = snake;
+      i += static_cast<int>(snake->sprites().size());
+    }
+  }
+  
+  // Spawn bosses
+  const auto& config = g_entitySpawner->getConfig();
+  for (int bossCount = 0; bossCount < config.bossCount; bossCount++) {
+    const Point pos = getAvaliablePos();
+    auto boss = g_entitySpawner->spawnBoss(pos.x, pos.y);
+    if (boss) {
+      spriteSnake[spritesCount++] = boss;
+    }
   }
 }
 
@@ -1472,6 +1224,11 @@ void initGame(int localPlayers, int remotePlayers, bool localFirst) {
   initRenderer();
   initCountDownBar();
 
+  // Initialize entity factory system
+  initializeEntityPrototypes();
+  g_entitySpawner = std::make_unique<EntitySpawner>();
+  g_entitySpawner->initializeLevel(gameLevel, stage);
+
   // create default hero at (w/2, h/2) (as well push ani)
   initializeEventObservers();
   for (int i = 0; i < localPlayers + remotePlayers; i++) {
@@ -1491,7 +1248,7 @@ void initGame(int localPlayers, int remotePlayers, bool localFirst) {
   initRandomMap(0.7, 7, GAME_TRAP_RATE);
 
   clearItemMap();
-  // create enemies
+  // create enemies using the new factory system
   initEnemies(spritesSetting);
   pushMapToRender();
   bullets.clear();
@@ -1905,16 +1662,29 @@ void moveSnake(const std::shared_ptr<Snake>& snake) {
   if (snake->buffs()[BUFF_SLOWDOWN]) {
     step = MAX(step / 2, 1);
   }
-  for (const auto& sprite : snake->sprites()) {
+  
+  auto& snakeSprites = snake->sprites();
+  for (auto it = snakeSprites.begin(); it != snakeSprites.end(); ++it) {
+    const auto& sprite = *it;
     if (!sprite) {
       continue;
     }
+    
     auto& buffer = sprite->positionBuffer();
     for (int move = 0; move < step; ++move) {
       if (buffer.size() > 0) {
         const PositionBufferSlot& slot = buffer.at(0);
         if (sprite->x() == slot.x && sprite->y() == slot.y) {
-          sprite->setDirection(slot.direction);
+          PositionBufferSlot consumed = buffer.pop();
+          auto nextIt = std::next(it);
+          if (nextIt != snakeSprites.end()) {
+            sprite->enqueueDirectionChange(consumed.direction, *nextIt);
+          } else {
+            sprite->setDirection(consumed.direction);
+            if (consumed.direction == Direction::Left || consumed.direction == Direction::Right) {
+              sprite->setFace(consumed.direction);
+            }
+          }
         }
       }
       moveSprite(sprite, 1);

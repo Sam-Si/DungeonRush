@@ -13,6 +13,16 @@ void PositionBuffer::push(PositionBufferSlot slot) {
   buffer_[size_++] = slot;
 }
 
+PositionBufferSlot PositionBuffer::pop() {
+  assert(size_ > 0);
+  PositionBufferSlot result = buffer_[0];
+  for (int i = 0; i < size_ - 1; ++i) {
+    buffer_[i] = buffer_[i + 1];
+  }
+  size_--;
+  return result;
+}
+
 int PositionBuffer::size() const { return size_; }
 
 const PositionBufferSlot& PositionBuffer::at(int index) const {
@@ -76,10 +86,17 @@ const PositionBuffer& Sprite::positionBuffer() const { return positionBuffer_; }
 
 void Sprite::enqueueDirectionChange(Direction newDirection,
                                     const std::shared_ptr<Sprite>& next) {
-  transform_.enqueueDirectionChange(newDirection, positionBuffer_);
+  if (transform_.direction() == newDirection) {
+    return;
+  }
+  
+  PositionBufferSlot slot{transform_.x(), transform_.y(), newDirection};
+  transform_.setDirection(newDirection);
+  if (newDirection == Direction::Left || newDirection == Direction::Right) {
+    transform_.setFace(newDirection);
+  }
+  
   if (next) {
-    PositionBufferSlot slot{transform_.x(), transform_.y(),
-                             transform_.direction()};
     next->positionBuffer().push(slot);
   }
 }

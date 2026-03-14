@@ -22,6 +22,7 @@ class PositionBuffer {
   PositionBuffer();
 
   void push(PositionBufferSlot slot);
+  PositionBufferSlot pop();
   int size() const;
 
   const PositionBufferSlot& at(int index) const;
