@@ -7,6 +7,7 @@
 #include "types.h"
 #include "map.h"
 #include "render.h"
+#include "core/game_state.h"
 
 #include <memory>
 #include <vector>
@@ -64,10 +65,6 @@ class EventBus {
 
 // Forward declarations
 class AIBehavior;
-class EntityManager;
-class CollisionManager;
-class ItemManager;
-class BuffManager;
 class GameLoopManager;
 class MapManager;
 class WeaponBehavior;
@@ -84,124 +81,17 @@ extern Effect effects[];
 extern Weapon weapons[];
 extern Sprite commonSprites[];
 extern std::array<AnimationList, ANIMATION_LINK_LIST_NUM> animationsList;
-extern bool hasMap[MAP_SIZE][MAP_SIZE];
 
-// ============================================================================
-// EntityManager - Manages all game entities (snakes, bullets)
-// ============================================================================
-class EntityManager {
- public:
-  EntityManager() = default;
-  EntityManager(const EntityManager&) = delete;
-  EntityManager& operator=(const EntityManager&) = delete;
-  EntityManager(EntityManager&&) = default;
-  EntityManager& operator=(EntityManager&&) = default;
-  ~EntityManager() = default;
+#include "entities/entity_manager.h"
+#include "systems/collision_manager.h"
+#include "systems/item_manager.h"
+#include "systems/buff_manager.h"
 
-  // Snake management
-  void addSnake(const std::shared_ptr<Snake>& snake);
-  void removeSnake(int index);
-  std::shared_ptr<Snake> getSnake(int index) const;
-  int snakeCount() const;
-  int playerCount() const;
-  void setPlayerCount(int count);
-  void incrementSpriteCount();
-  int spriteCount() const;
-
-  // Bullet management
-  void addBullet(const std::shared_ptr<Bullet>& bullet);
-  void removeBullet(const std::shared_ptr<Bullet>& bullet);
-  BulletList& bullets();
-  const BulletList& bullets() const;
-
-  // Entity access
-  std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM>& snakes();
-  const std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM>& snakes() const;
-
-  void clear();
-
- private:
-  std::array<std::shared_ptr<Snake>, SPRITES_MAX_NUM> snakes_{};
-  BulletList bullets_{};
-  int spritesCount_ = 0;
-  int playersCount_ = 0;
-};
-
-// ============================================================================
-// CollisionManager - Handles all collision detection
-// ============================================================================
-class CollisionManager {
- public:
-  CollisionManager() = default;
-  CollisionManager(const CollisionManager&) = delete;
-  CollisionManager& operator=(const CollisionManager&) = delete;
-  CollisionManager(CollisionManager&&) = default;
-  CollisionManager& operator=(CollisionManager&&) = default;
-  ~CollisionManager() = default;
-
-  bool checkCrush(const std::shared_ptr<Sprite>& sprite, bool loose,
-                  bool useAnimationBox, EntityManager& entityManager);
-  bool isPlayer(const std::shared_ptr<Snake>& snake, EntityManager& entityManager) const;
-
- private:
-};
-
-// ============================================================================
-// ItemManager - Handles item generation and management
-// ============================================================================
-class ItemManager {
- public:
-  ItemManager() = default;
-  ItemManager(const ItemManager&) = delete;
-  ItemManager& operator=(const ItemManager&) = delete;
-  ItemManager(ItemManager&&) = default;
-  ItemManager& operator=(ItemManager&&) = default;
-  ~ItemManager() = default;
-
-  void initItems(int heroCount, int flaskCount);
-  void clearItems();
-  void generateHeroItem(int x, int y);
-  void generateItem(int x, int y, ItemType type);
-  void dropItemNearSprite(const Sprite* sprite, ItemType itemType);
-  bool checkItemPickup(const std::shared_ptr<Snake>& snake,
-                       EntityManager& entityManager);
-
-  std::array<std::array<Item, MAP_SIZE>, MAP_SIZE>& itemMap();
-  const std::array<std::array<Item, MAP_SIZE>, MAP_SIZE>& itemMap() const;
-
-  int heroCount() const;
-  void setHeroCount(int count);
-  int flaskCount() const;
-  void setFlaskCount(int count);
-
- private:
-  std::array<std::array<Item, MAP_SIZE>, MAP_SIZE> itemMap_{};
-  int herosCount_ = 0;
-  int flasksCount_ = 0;
-};
-
-// ============================================================================
-// BuffManager - Handles buff effects on snakes
-// ============================================================================
-class BuffManager {
- public:
-  BuffManager() = default;
-  BuffManager(const BuffManager&) = delete;
-  BuffManager& operator=(const BuffManager&) = delete;
-  BuffManager(BuffManager&&) = default;
-  BuffManager& operator=(BuffManager&&) = default;
-  ~BuffManager() = default;
-
-  void freezeSnake(Snake* snake, int duration);
-  void slowDownSnake(Snake* snake, int duration);
-  void shieldSnake(const std::shared_ptr<Snake>& snake, int duration);
-  void attackUpSnake(const std::shared_ptr<Snake>& snake, int duration);
-  void updateBuffDurations(EntityManager& entityManager);
-  void invokeWeaponBuff(const std::shared_ptr<Snake>& src, const Weapon& weapon,
-                        const std::shared_ptr<Snake>& dest, int damage);
-
- private:
-};
+// Typedefs for backward compatibility
+using EntityManager = snake::entities::EntityManager;
+using CollisionManager = snake::systems::CollisionManager;
+using ItemManager = snake::systems::ItemManager;
+using BuffManager = snake::systems::BuffManager;
 
 // ============================================================================
 // GameLoopManager - Handles the main game loop logic
@@ -244,25 +134,42 @@ class GameLoopManager {
 // GameContext - Central context holding all game state
 // ============================================================================
 struct GameContext {
-  EntityManager entityManager;
-  CollisionManager collisionManager;
-  ItemManager itemManager;
-  BuffManager buffManager;
+  // Core state container - all global state lives here
+  snake::core::GameState gameState;
+
+  // Managers
+  snake::entities::EntityManager entityManager;
+  snake::systems::CollisionManager collisionManager;
+  snake::systems::ItemManager itemManager;
+  snake::systems::BuffManager buffManager;
   std::shared_ptr<AIBehavior> aiBehavior;
   EventBus eventBus;
 
-  // Game state
-  int gameLevel = 0;
-  int stage = 0;
-  int status = 0;
-  int termCount = 0;
-  bool willTerm = false;
+  // Map state
+  std::array<std::array<Block, MAP_SIZE>, MAP_SIZE> map{};
+  std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasMap{};
+  std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasEnemy{};
 
-  // Level settings
-  int spritesSetting = 25;
-  int bossSetting = 2;
+  // Game configuration (convenience accessors for legacy globals)
+  int gameLevel() const;
+  int& gameLevel();
+  int stage() const;
+  int& stage();
+  int status() const;
+  int& status();
+  bool willTerm() const;
+  bool& willTerm();
+  int termCount() const;
+  int& termCount();
+  int winNum() const;
+  int& winNum();
+
   int herosSetting = 8;
   int flasksSetting = 6;
+  int spritesSetting = 25;
+  int bossSetting = 2;
+  int spikeDamage = 1;
+
   double gameLucky = 1.0;
   double dropoutYellowFlasks = 0.3;
   double dropoutWeapons = 0.7;
@@ -270,10 +177,6 @@ struct GameContext {
   double monstersHpAdjust = 1.0;
   double monstersWeaponBuffAdjust = 1.0;
   double monstersGenFactor = 1.0;
-  int winNum = 10;
-
-  // Enemy position tracking
-  std::array<std::array<bool, MAP_SIZE>, MAP_SIZE> hasEnemy{};
 
   GameContext() = default;
   GameContext(const GameContext&) = delete;
@@ -281,6 +184,10 @@ struct GameContext {
   GameContext(GameContext&&) = default;
   GameContext& operator=(GameContext&&) = default;
   ~GameContext() = default;
+
+  // Access the centralized game state
+  snake::core::GameState& state() { return gameState; }
+  const snake::core::GameState& state() const { return gameState; }
 
   void reset();
   void setLevel(int level);
