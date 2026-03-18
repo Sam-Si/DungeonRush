@@ -152,7 +152,7 @@ double GAME_MONSTERS_GEN_FACTOR = 1.0;
 int spikeDamage = 1;
 
 // Entity arrays
-std::array<std::shared_ptr<Snake>, kMaxSprites> spriteSnake{};
+std::array<std::shared_ptr<Snake>, snake::entities::kSpritesMaxNum> spriteSnake{};
 BulletList bullets;
 
 // ============================================================================
