@@ -252,7 +252,7 @@ void Score::calcScore(int gameLevel) {
     rank_ = 0.0;
     return;
   }
-  rank_ = static_cast<double>(damage_) / got_ +
+  rank_ = static_cast<double>(damage_) / got_ -
           static_cast<double>(stand_) / got_ + got_ * 50 + killed_ * 100;
   rank_ *= gameLevel + 1;
 }

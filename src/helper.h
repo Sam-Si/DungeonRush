@@ -8,8 +8,8 @@
 #include "sprite.h"
 #include "types.h"
 
-#define MAX(x, y) (x > y ? x : y)
-#define MIN(x, y) (x > y ? y : x)
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
 #define PI 3.1415926535
 #define HELPER_RECT_CROSS_LIMIT 8
 int randInt(int l, int r);

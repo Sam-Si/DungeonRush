@@ -32,23 +32,18 @@ bool RectRectCross(const SDL_Rect* a, const SDL_Rect* b) {
 }
 bool RectCirCross(const SDL_Rect* a, int x, int y, int r) {
   if (inr(x, a->x, a->x + a->w) && inr(y, a->y, a->y + a->h)) {
-    puts("failed1");
     return true;
   }
-  if (abs(x - a->x) <= r) {
-    puts("failed2");
+  if (abs(x - a->x) <= r && inr(y, a->y, a->y + a->h)) {
     return true;
   }
-  if (abs(x - a->x - a->w) <= r) {
-    puts("failed3");
+  if (abs(x - a->x - a->w) <= r && inr(y, a->y, a->y + a->h)) {
     return true;
   }
-  if (abs(y - a->y) <= r) {
-    puts("failed4");
+  if (abs(y - a->y) <= r && inr(x, a->x, a->x + a->w)) {
     return true;
   }
-  if (abs(y - a->y - a->h) <= r) {
-    puts("failed5");
+  if (abs(y - a->y - a->h) <= r && inr(x, a->x, a->x + a->w)) {
     return true;
   }
   return false;

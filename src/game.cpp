@@ -919,6 +919,10 @@ void initPlayer(int playerType) {
   appendSpriteToSnake(snake, SPRITE_KNIGHT, SCREEN_WIDTH / 2,
                       SCREEN_HEIGHT / 2 + playersCount * 2 * UNIT,
                       Direction::Right);
+  // Also register in EntityManager so attack/bullet/render systems can find it
+  GameContext& ctx = getGameContext();
+  ctx.entityManager.addSnake(snake);
+  ctx.entityManager.setPlayerCount(playersCount + 1);
   playersCount++;
 }
 void generateHeroItem(int x, int y) {
@@ -1025,7 +1029,7 @@ bool takeWeapon(Snake* snake, Item* weaponItem) {
       }
       sprite->setHp(sprite->hp() +
                     static_cast<int>(GAME_HP_MEDICINE_EXTRA_DELTA / 100.0 *
-                                     sprite->totalHp() * 5));
+                                     sprite->totalHp()));
       auto effect = createAndPushAnimation(
           animationsList[RENDER_LIST_EFFECT_ID], &textures[RES_HP_MED], nullptr,
           LoopType::Once, SPRITE_ANIMATION_DURATION, 0, 0, SDL_FLIP_NONE, 0,
@@ -1052,8 +1056,8 @@ void dropItemNearSprite(const Sprite* sprite, ItemType itemType) {
         } else {
           generateItem(x, y, itemType);
         }
+        return;
       }
-      return;
     }
   }
 }
@@ -1187,11 +1191,13 @@ void initEnemies(int enemiesCount) {
     return;
   }
   
+  GameContext& ctx = getGameContext();
   for (int i = 0; i < enemiesCount;) {
     const Point pos = getAvaliablePos();
     auto snake = g_entitySpawner->spawnMonster(pos.x, pos.y);
     if (snake) {
       spriteSnake[spritesCount++] = snake;
+      ctx.entityManager.addSnake(snake);
       i += static_cast<int>(snake->sprites().size());
     }
   }
@@ -1203,6 +1209,7 @@ void initEnemies(int enemiesCount) {
     auto boss = g_entitySpawner->spawnBoss(pos.x, pos.y);
     if (boss) {
       spriteSnake[spritesCount++] = boss;
+      ctx.entityManager.addSnake(boss);
     }
   }
 }
@@ -1389,12 +1396,12 @@ void dealDamage(const std::shared_ptr<Snake>& src,
   if (dest->buffs()[BUFF_FROZEN]) {
     calcDamage *= GAME_FROZEN_DAMAGE_K;
   }
-  if (src && src != spriteSnake[GAME_MONSTERS_TEAM]) {
+  if (src && src->team() != GAME_MONSTERS_TEAM) {
     if (src->buffs()[BUFF_ATTACK]) {
       calcDamage *= GAME_BUFF_ATTACK_K;
     }
   }
-  if (dest != spriteSnake[GAME_MONSTERS_TEAM]) {
+  if (dest->team() != GAME_MONSTERS_TEAM) {
     if (dest->buffs()[BUFF_DEFFENCE]) {
       calcDamage /= GAME_BUFF_DEFENSE_K;
     }
@@ -1406,7 +1413,7 @@ void dealDamage(const std::shared_ptr<Snake>& src,
       src->score()->addKilled(1);
     }
   }
-  dest->score()->addStand(damage);
+  dest->score()->addStand(static_cast<int>(calcDamage));
 }
 
 bool makeSnakeCross(const std::shared_ptr<Snake>& snake) {
@@ -1981,6 +1988,17 @@ int gameLoop() {
           spriteSnake[j] = spriteSnake[j + 1];
         }
         spriteSnake[spritesCount--] = nullptr;
+      }
+    }
+    // Keep EntityManager in sync with legacy spriteSnake array
+    {
+      GameContext& ctx = getGameContext();
+      ctx.entityManager.clear();
+      ctx.entityManager.setPlayerCount(playersCount);
+      for (int i = 0; i < spritesCount; i++) {
+        if (spriteSnake[i]) {
+          ctx.entityManager.addSnake(spriteSnake[i]);
+        }
       }
     }
     if (willTerm) {

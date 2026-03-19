@@ -65,6 +65,11 @@ Score** insertScoreToRanklist(Score* score, int* n, Score** scores) {
       return scores;
     }
   }
+  // Score is lower than all existing entries but list isn't full - append it
+  if (*n < STORAGE_RANKLIST_NUM) {
+    scores = static_cast<Score**>(realloc(scores, sizeof(Score*) * (++*n)));
+    scores[*n - 1] = cloneScore(score);
+  }
   return scores;
 }
 
