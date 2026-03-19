@@ -12,6 +12,7 @@
 #include "types.h"
 
 extern Texture textures[TEXTURES_SIZE];
+extern BulletList bullets;
 
 namespace {
 std::shared_ptr<Animation> createWeaponAnimation(int textureId, LoopType loop,
@@ -66,7 +67,7 @@ void applyWeaponDamage(const std::shared_ptr<Snake>& src,
       src->score()->addKilled(1);
     }
   }
-  dest->score()->addStand(weapon.damage());
+  dest->score()->addStand(static_cast<int>(calcDamage));
   ctx.buffManager.invokeWeaponBuff(src, weapon, dest, weapon.damage());
 }
 
@@ -149,8 +150,7 @@ class RangedBehavior final : public WeaponBehavior {
                                            context.attackerSprite->y(), rad,
                                            context.attacker->team(),
                                            weapon.flyAnimation());
-    GameContext& ctx = getGameContext();
-    ctx.entityManager.addBullet(bullet);
+    ::bullets.push_back(bullet);
     pushAnimationToRender(RENDER_LIST_EFFECT_ID, bullet->animation());
     return {.attacked = true};
   }

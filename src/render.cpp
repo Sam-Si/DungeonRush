@@ -362,7 +362,7 @@ void renderAnimationLinkListWithSort(const AnimationList& list) {
     buffer.push_back(animation);
   }
   std::sort(buffer.begin(), buffer.end(), [](const auto& a, const auto& b) {
-    return a && b ? b->y() < a->y() : static_cast<bool>(a);
+    return a && b ? a->y() < b->y() : static_cast<bool>(a);
   });
   for (const auto& animation : buffer) {
     renderAnimation(animation);
